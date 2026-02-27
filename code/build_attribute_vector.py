@@ -1,5 +1,5 @@
 # scripts/build_attribute_vector_refactored.py
-# João Mata 16-02-2026 (NPC-ready)
+# João Mata 16-02-2026
 
 import os
 import logging
@@ -219,27 +219,44 @@ def build_split(csv_filename, output_filename, base_dir, models, segmentation_mo
 
     all_vectors = []
 
+    # Go through each sample in the dataset and build the feature vector
     for i in tqdm(range(len(dataset)), desc=f"Building {csv_filename}"):
-    #for i in tqdm(range(5), desc=f"Building {csv_filename}"):
-        sample = dataset[i]
-        row = dataset.csv.iloc[i]
-        img_path = row["Path"]
+        try:
+            # Load image and path
+            sample = dataset[i]
+            row = dataset.csv.iloc[i]
+            img_path = row["Path"]
 
-        img_array = sample['img']
-        if len(img_array.shape) == 2:
-            img_np = img_array
-            img_tensor = torch.from_numpy(img_array).unsqueeze(0).float()
-        else:
-            img_np = img_array[0]
-            img_tensor = torch.from_numpy(img_array).float()
+            # Get the image array and convert to tensor
+            img_array = sample['img']
+            if len(img_array.shape) == 2:
+                img_np = img_array
+                img_tensor = torch.from_numpy(img_array).unsqueeze(0).float()
+            else:
+                img_np = img_array[0]
+                img_tensor = torch.from_numpy(img_array).float()
 
-        vector = builder.build_vector(img_tensor, img_np, img_path=img_path, plot=False)
-        all_vectors.append(vector)
+            # Build the feature vector for this image
+            vector = builder.build_vector(img_tensor, img_np, img_path=img_path, plot=False)
+            # Add the vector to our list of all vectors
+            all_vectors.append(vector)
 
+        # Had some problems with some png, hopefully not too many, so we skip those and print a warning
+        except Exception as e:
+            print(f"[SKIP] Failed to process {dataset.csv.iloc[i]['Path']}: {e}")
+            continue
+
+        # Save every 100 samples to not risk losing everything if something goes wrong, and also to have intermediate results to check
+        if (i + 1) % 100 == 0:
+            df_temp = pd.DataFrame(all_vectors)
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            df_temp.to_csv(output_path, index=False)
+            print(f"[INFO] Saved {len(df_temp)} samples so far to {output_path}")
+
+    # Save the final CSV at the end
     df = pd.DataFrame(all_vectors)
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     df.to_csv(output_path, index=False)
-
     print(f"Saved {len(df)} samples to {output_path}")
     print(f"Total features: {df.shape[1]}")
 

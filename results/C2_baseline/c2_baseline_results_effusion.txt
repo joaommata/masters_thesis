@@ -1,0 +1,17 @@
+=== C2 Baseline Results Effusion ===
+
+Feature      : C0 output probability (single disease)
+Model        : Logistic Regression (class_weight=balanced)
+
+              precision    recall  f1-score   support
+
+       Wrong       0.21      0.36      0.27        44
+     Correct       0.77      0.62      0.69       156
+
+    accuracy                           0.56       200
+   macro avg       0.49      0.49      0.48       200
+weighted avg       0.65      0.56      0.59       200
+
+AUC          : 0.560
+Coefficients : {'prob': 0.47911970141548793}
+Intercept    : 0.0482

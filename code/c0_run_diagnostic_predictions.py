@@ -24,13 +24,14 @@ from PIL import Image
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from sklearn.metrics import roc_curve, roc_auc_score
+import matplotlib.pyplot as plt
 
 # ── Config ─────────────────────────────────────────────────────────────────────
+TARGET_DISEASE = "Pneumothorax"  # change this to run on a different disease
 
 BASE_DIR       = "/zhome/d0/a/221493/thesis"
 DATA_PATH      = os.path.join(BASE_DIR, "data/CheXpert-v1.0-small")
-OUTPUT_DIR     = os.path.join(BASE_DIR, "results/C0_baseline")
-TARGET_DISEASE = "Cardiomegaly"
+OUTPUT_DIR     = os.path.join(BASE_DIR, "results/C0_baseline/", TARGET_DISEASE.lower().replace(" ", "_")    )
 BATCH_SIZE     = 32
 DEVICE         = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -150,27 +151,54 @@ def main():
         xrv.datasets.XRayResizer(224),
     ])
 
+    # ── Inspect raw CSV BEFORE torchxrayvision filtering ── THIS WAS FOR DEBUGGING
+    raw_train_csv = os.path.join(DATA_PATH, "train.csv")
+    df = pd.read_csv(raw_train_csv)
+    
+    print("\n===== RAW CSV DIAGNOSTICS =====")
+    print("Total rows:", len(df))
+    print("Frontal:", (df["Frontal/Lateral"] == "Frontal").sum())
+    print("Lateral:", (df["Frontal/Lateral"] == "Lateral").sum())
+    print("AP:", (df["AP/PA"] == "AP").sum())
+    print("PA:", (df["AP/PA"] == "PA").sum())
+    print("AP+PA total:", df["AP/PA"].isin(["AP","PA"]).sum())
+    print("Frontal but AP/PA missing:",
+          ((df["Frontal/Lateral"]=="Frontal") & df["AP/PA"].isna()).sum())
+    print("================================\n")
+
     # Datasets
     train_dataset = CheXpertDataset(
-        imgpath=DATA_PATH,
-        csvpath=os.path.join(DATA_PATH, "train.csv"),
-        views=["PA", "AP"],
-        transform=transform
-    )
+    imgpath=DATA_PATH,
+    csvpath=os.path.join(DATA_PATH, "train.csv"),
+    views=["PA", "AP"],
+    transform=transform,
+    unique_patients=False   
+)
+
+    print("Train samples (len(dataset)):", len(train_dataset))
+    print("Internal CSV length:", len(train_dataset.csv))
+        
+
     valid_dataset = CheXpertDataset(
         imgpath=DATA_PATH,
         csvpath=os.path.join(DATA_PATH, "valid.csv"),
         views=["PA", "AP"],
-        transform=transform
+        transform=transform,
+        unique_patients=False   
     )
+    
     print(f"Train samples : {len(train_dataset)}")
     print(f"Valid samples : {len(valid_dataset)}\n")
+    
+    # ----------------------
+    # ON THE TARGET DISEASE
+    # ----------------------
 
-    # Run inference
+    # Run inference 
     train_df = run_c0(model, train_dataset, disease_idx, "train")
     valid_df = run_c0(model, valid_dataset, disease_idx, "valid")
 
-    # Drop NaN and uncertain (-1) labels — these cannot be used as C2 supervision
+    # Drop NaN and uncertain (-1) labels — these cannot be used as C2 supervision - THIS ONLY DOES IT FOR THE TARGET DISEASE
     train_clean = train_df[train_df["true"].isin([0.0, 1.0])].copy()
     valid_clean = valid_df[valid_df["true"].isin([0.0, 1.0])].copy()
     print(f"Train after dropping NaN/-1 : {len(train_clean)}")
@@ -189,7 +217,7 @@ def main():
         acc = df["correct"].mean()
         counts = df["correct"].value_counts().to_dict()
         print(f"{name} → correct: {counts} | Accuracy: {acc:.3f}")
-
+    
     # Save
     disease_tag = TARGET_DISEASE.lower().replace(" ", "_")
     train_out = os.path.join(OUTPUT_DIR, f"train_c0_{disease_tag}.csv")

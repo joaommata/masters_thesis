@@ -6,7 +6,7 @@ for a target disease was correct or wrong, using only C0's output probability
 as input feature.
 
 This is the simplest possible quality control baseline:
-"Can knowing how confident C0 was tell you if it was right?"
+"Can knowing C0 output probability tell you if it was right?"
 
 Inputs  : train_c0_{disease}.csv and valid_c0_{disease}.csv
 Outputs : c2_baseline.pkl        (trained model)
@@ -23,6 +23,7 @@ import joblib
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import seaborn as sns
 
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
@@ -37,9 +38,10 @@ from sklearn.metrics import (
 # ── Config ─────────────────────────────────────────────────────────────────────
 
 BASE_DIR       = "/zhome/d0/a/221493/thesis"
-TARGET_DISEASE = "Effusion"
-DATA_DIR       = os.path.join(BASE_DIR, "results/C0_baseline")
-OUTPUT_DIR     = os.path.join(BASE_DIR, "results/C2_baseline")
+TARGET_DISEASE = "Pneumothorax" # Effusion, Pneumothorax, Cardiomegaly (available so far)
+disease_folder = TARGET_DISEASE.lower()
+DATA_DIR = os.path.join(BASE_DIR, f"results/C0_baseline/{disease_folder}")
+OUTPUT_DIR = os.path.join(BASE_DIR, f"results/C2_baseline/{disease_folder}")
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -86,7 +88,7 @@ def evaluate(model, scaler, X_valid, y_valid, output_dir):
     auc    = roc_auc_score(y_valid, y_pred_prob)
     report = classification_report(
         y_valid, y_pred,
-        target_names=["Wrong", "Correct"],
+        target_names=["Wrong Prediction", "Correct Prediction"],
         zero_division=0
     )
 
@@ -118,17 +120,31 @@ def evaluate(model, scaler, X_valid, y_valid, output_dir):
     plt.plot([0, 1], [0, 1], "k--", label="Random")
     plt.xlabel("FPR")
     plt.ylabel("TPR")
-    plt.title("C2 Baseline ROC\nCan C0 confidence predict correctness?")
+    plt.title("C2 Baseline ROC\nCan C0 probs predict correctness?")
     plt.legend()
     plt.tight_layout()
     roc_path = os.path.join(output_dir, f"c2_baseline_roc_{TARGET_DISEASE.lower().replace(' ', '_')}.png")
     plt.savefig(roc_path, dpi=150)
     plt.close()
     print(f"ROC curve saved → {roc_path}")
+    
+    # --- Distribution of C0 probabilities by correctness ---──────────────
+    plt.figure()
+    plt.hist(X_valid[y_valid == 1], bins=20, alpha=0.7, label="Correct Predictions", color="g")
+    plt.hist(X_valid[y_valid == 0], bins=20, alpha=0.7, label="Wrong Predictions", color="r")
+    plt.xlabel("C0 Output Probability for Target Disease")
+    plt.ylabel("Count")
+    plt.title(f"C0 Output Probability Distribution by Correctness (Valid Set) - {TARGET_DISEASE}")
+    plt.legend()
+    plt.tight_layout()
+    hist_path = os.path.join(output_dir, f"c0_prob_hist_{TARGET_DISEASE.lower().replace(' ', '_')}.png")
+    plt.savefig(hist_path, dpi=150)
+    plt.close()
+    print(f"C0 probability histogram saved → {hist_path}")
 
     # ── Confusion matrix ───────────────────────────────────────────
     cm = confusion_matrix(y_valid, y_pred)
-    ConfusionMatrixDisplay(cm, display_labels=["Wrong", "Correct"]).plot()
+    ConfusionMatrixDisplay(cm, display_labels=["Wrong Prediction", "Correct Prediction"]).plot(cmap="Blues")
     plt.title("C2 Baseline Confusion Matrix")
     plt.tight_layout()
     cm_path = os.path.join(output_dir, f"c2_baseline_cm_{TARGET_DISEASE.lower().replace(' ', '_')}.png")
@@ -147,9 +163,16 @@ def main():
     print(f"Output dir     : {OUTPUT_DIR}\n")
 
     # Load
-    train_df, valid_df = load_data(TARGET_DISEASE)
-    print(f"Train rows : {len(train_df)}")
-    print(f"Valid rows : {len(valid_df)}")
+    train_df, valid_df = load_data(TARGET_DISEASE) 
+    print(f"Train rows for {TARGET_DISEASE} C2 Baseline : {len(train_df)}")
+    print(f"Valid rows for {TARGET_DISEASE} C2 Baseline : {len(valid_df)}")
+    
+    import pandas as pd
+
+    # mean prob per true/correct
+    #print("SANITY CHECK: C0 probability distribution by correctness (valid set):")
+    #print(train_df.groupby('true')['prob'].describe())
+    #print(train_df.groupby('correct')['prob'].describe())
 
     prob_col = "prob"  # column name saved by run_c0_baseline.py
 
@@ -170,7 +193,6 @@ def main():
     joblib.dump(c2, model_path)
     joblib.dump(scaler, os.path.join(OUTPUT_DIR, f"c2_baseline_scaler_{TARGET_DISEASE.lower().replace(' ', '_')}.pkl"))
     print(f"\nModel and scaler saved to {model_path}.")
-
-
+    
 if __name__ == "__main__":
     main()

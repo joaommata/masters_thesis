@@ -1,4 +1,4 @@
-# scripts/build_attribute_vector_refactored.py
+# scripts/c1_build_attribute_vector.py
 # João Mata 16-02-2026
 
 import os
@@ -6,6 +6,7 @@ import logging
 import numpy as np
 import pandas as pd
 import torch
+from torch.utils.data import DataLoader
 import torchxrayvision as xrv
 from radiomics import featureextractor
 import SimpleITK as sitk
@@ -14,57 +15,61 @@ from tqdm import tqdm
 import matplotlib
 matplotlib.use('Agg')  # Headless mode for NPC
 import matplotlib.pyplot as plt
+from concurrent.futures import ThreadPoolExecutor
 
-# Suppress radiomics warnings
+# Suppress radiomics warnings they were annoying
 logger = logging.getLogger('radiomics')
 logger.setLevel(logging.ERROR)
 
-# Class to build feature vectors for each image
+
 class FeatureVectorBuilder:
     def __init__(self, models, segmentation_model=None, radiomics_extractor=None, device=None):
         self.models = models
         self.segmentation_model = segmentation_model
         self.extractor = radiomics_extractor
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-        # Move models to device and set to eval mode
+        
+        # Move models to device and set to eval mode to ensure they don't update their weights and to speed up inference
         for model in self.models.values():
             model.to(self.device).eval()
         if self.segmentation_model:
             self.segmentation_model.to(self.device).eval()
 
     # --------------------
-    # Model Predictions
+    # Batched Model Predictions -> OPTIMIZED using AI to reduce GPU overhead and speed up processing
     # --------------------
-    # Each prediction method takes a single image tensor (C x H x W) and returns the predicted attribute(s)
-    def predict_age(self, img_tensor):
-        img_tensor = img_tensor.unsqueeze(0).to(self.device)
+    def predict_age_batch(self, img_batch):
+        img_batch = img_batch.to(self.device)
         with torch.no_grad():
-            # Age model outputs a single scalar per image
-            pred = self.models['age'](img_tensor).cpu().numpy()[0][0]
-        return float(pred)
+            preds = self.models['age'](img_batch).cpu().numpy()
+        return [float(p[0]) for p in preds]
 
-    def predict_sex(self, img_tensor):
-        img_tensor = img_tensor.unsqueeze(0).to(self.device)
+    def predict_sex_batch(self, img_batch):
+        img_batch = img_batch.to(self.device)
         with torch.no_grad():
-            logits = self.models['sex'](img_tensor)
-            probs = torch.softmax(logits, dim=1).cpu().numpy()[0]
-        # Get indices for Male and  Female
-        idx_male = self.models['sex'].targets.index("Male")
+            logits = self.models['sex'](img_batch)
+            probs = torch.softmax(logits, dim=1).cpu().numpy()
+        idx_male   = self.models['sex'].targets.index("Male")
         idx_female = self.models['sex'].targets.index("Female")
-        # Return probabilities for both classes (indices)
-        return probs[idx_male], probs[idx_female]
+        return [(probs[i][idx_male], probs[i][idx_female]) for i in range(len(probs))]
 
-    def predict_race(self, img_tensor):
-        img_tensor = img_tensor.unsqueeze(0).to(self.device)
+    def predict_race_batch(self, img_batch):
+        img_batch = img_batch.to(self.device)
         with torch.no_grad():
-            logits = self.models['race'](img_tensor)
-            probs = torch.softmax(logits, dim=1).cpu().numpy()[0]
-        # Same for race
+            logits = self.models['race'](img_batch)
+            probs = torch.softmax(logits, dim=1).cpu().numpy()
         idx_white = self.models['race'].targets.index("White")
         idx_black = self.models['race'].targets.index("Black")
         idx_asian = self.models['race'].targets.index("Asian")
-        return probs[idx_white], probs[idx_black], probs[idx_asian]
+        return [(probs[i][idx_white], probs[i][idx_black], probs[i][idx_asian]) for i in range(len(probs))]
+
+    def predict_segmentation_batch(self, img_batch):
+        img_batch = img_batch.to(self.device)
+        with torch.no_grad():
+            seg_output = self.segmentation_model(img_batch).cpu().numpy()
+        seg_output = 1 / (1 + np.exp(-seg_output))
+        seg_output = (seg_output >= 0.5).astype(np.uint8)
+        return seg_output  # (B, num_classes, H, W)
 
     # --------------------
     # Radiomics Features
@@ -77,45 +82,50 @@ class FeatureVectorBuilder:
         )
         mask_resized = (mask_resized > 0).astype(np.uint8)
 
+        # Safeguards against empty or too small masks which can cause radiomics extraction to fail. 
+        # This can happen if the segmentation model fails to detect the class in the image.
         if mask_resized.sum() == 0:
             print(f"[SKIP] {class_name} mask is empty.")
             return {}
         if mask_resized.shape[0] < 2 or mask_resized.shape[1] < 2:
             print(f"[SKIP] {class_name} mask too small: {mask_resized.shape}")
             return {}
-
-        img_sitk = sitk.GetImageFromArray(img_np.astype(np.float32))
+        
+        # Convert to SimpleITK images for radiomics. Radiomics expects the image and mask to be in a specific format, so we need to convert our numpy arrays to SimpleITK images. 
+        img_sitk  = sitk.GetImageFromArray(img_np.astype(np.float32))
         mask_sitk = sitk.GetImageFromArray(mask_resized.astype(np.uint8))
 
+        # Extract features using the radiomics extractor.
         try:
             feats = self.extractor.execute(img_sitk, mask_sitk)
             feats = {f"{class_name}_{k}": v for k, v in feats.items() if not k.startswith("diagnostics_")}
+        # This can fail for various reasons (e.g. if the mask is not valid, if the image has too few pixels, etc.) so we wrap it in a try-except block to catch any errors and continue processing other classes/images.
         except Exception as e:
             print(f"[ERROR] Failed to extract features for {class_name}: {e}")
             feats = {}
 
         return feats
-    
+
     # --------------------
-    # Interpretable Geometric Feautures
+    # Interpretable Geometric Features 
+    # - Height, width, area, perimeter, etc.
+    # - For now these can serve as a proxy for radiomics features to speed up processing, but we can always add more later if needed. 
+    # - These features are also more interpretable and can be useful for analysis and understanding model behavior.
     # --------------------
     def extract_geometry_features(self, mask_np, class_name, pixel_spacing=None):
         geo_feats = {}
 
-        # Calculate area in pixels 
         area_pixels = float(mask_np.sum())
         geo_feats[f"{class_name}_area_pixels"] = area_pixels
 
-        # Bounding box
         ys, xs = np.where(mask_np > 0)
         if len(xs) > 0 and len(ys) > 0:
-            width = xs.max() - xs.min()
+            width  = xs.max() - xs.min()
             height = ys.max() - ys.min()
-            geo_feats[f"{class_name}_bbox_width"] = float(width)
+            geo_feats[f"{class_name}_bbox_width"]  = float(width)
             geo_feats[f"{class_name}_bbox_height"] = float(height)
-            geo_feats[f"{class_name}_bbox_ratio"] = float(width / (height + 1e-6))
+            geo_feats[f"{class_name}_bbox_ratio"]  = float(width / (height + 1e-6))
 
-        # Perimeter (approx)
         contours, _ = cv2.findContours(mask_np.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if len(contours) > 0:
             perimeter = cv2.arcLength(contours[0], True)
@@ -124,7 +134,7 @@ class FeatureVectorBuilder:
         return geo_feats
 
     # --------------------
-    # Plotting (optional)
+    # Plotting (optional) - can be useful for debugging and visualization, but can be disabled for speed when processing large batches.
     # --------------------
     def plot_segmentation(self, img_np, seg_output, save_path=None):
         num_classes = len(self.segmentation_model.targets)
@@ -146,114 +156,133 @@ class FeatureVectorBuilder:
         plt.close()
 
     # --------------------
-    # Build full vector
+    # Build vectors for a full batch
     # --------------------
-    def build_vector(self, img_tensor, img_np, img_path, plot=False):
-        parts = img_path.replace("\\", "/").split("/")
+    def build_vectors_batch(self, img_tensors, img_nps, img_paths, plot=False):
+        B = img_tensors.shape[0]
 
-        age_pred = self.predict_age(img_tensor)
-        sex_male, sex_female = self.predict_sex(img_tensor)
-        race_white, race_black, race_asian = self.predict_race(img_tensor)
+        age_preds  = self.predict_age_batch(img_tensors)
+        sex_preds  = self.predict_sex_batch(img_tensors)
+        race_preds = self.predict_race_batch(img_tensors)
 
-        # Start with basic attributes + the predictions from the torchxrayvision models
-        vector = {
-            'patient_id': parts[-3] if len(parts) >= 3 else parts[-2],
-            'path': img_path,
-            'age_pred': age_pred,
-            'sex_male': sex_male,
-            'sex_female': sex_female,
-            'race_white': race_white,
-            'race_black': race_black,
-            'race_asian': race_asian
-        }
-
-        # Add segmentation-based features if we have a segmentation model
+        seg_outputs = None
         if self.segmentation_model:
-            with torch.no_grad():
-                seg_output = self.segmentation_model(img_tensor.unsqueeze(0).to(self.device)).cpu().numpy()
-            seg_output = 1 / (1 + np.exp(-seg_output))
-            seg_output = (seg_output >= 0.5).astype(np.uint8)
+            seg_outputs = self.predict_segmentation_batch(img_tensors)
 
-            if plot:
-                self.plot_segmentation(img_np, seg_output)
+        # Build initial vectors with model predictions
+        vectors = []
 
-            for class_idx, class_name in enumerate(self.segmentation_model.targets):
-                # Extract binary mask for this class
-                mask_np = seg_output[0, class_idx]
-                if mask_np.sum() == 0:
-                    continue
-                
-                # Extract geometric features from the masks
+        for b in range(B):
+            parts = img_paths[b].replace("\\", "/").split("/")
+            vector = {
+                'patient_id': parts[-3] if len(parts) >= 3 else parts[-2],
+                'path':       img_paths[b],
+                'age_pred':   age_preds[b],
+                'sex_male':   sex_preds[b][0],
+                'sex_female': sex_preds[b][1],
+                'race_white': race_preds[b][0],
+                'race_black': race_preds[b][1],
+                'race_asian': race_preds[b][2],
+            }
+            vectors.append(vector)
+
+        # If i have a segmentation output, i want to extract radiomics features for each class in parallel
+        if seg_outputs is not None:
+            # Build a flat list of all (b, class_name, img_np, mask_np) tasks across the whole batch
+            tasks = []
+            for b in range(B):
+                for class_idx, class_name in enumerate(self.segmentation_model.targets):
+                    mask_np = seg_outputs[b, class_idx]
+                    if mask_np.sum() == 0:
+                        continue
+                    tasks.append((b, class_name, img_nps[b], mask_np))
+
+            def run_radiomics(args):
+                b, class_name, img_np, mask_np = args
                 geom_feats = self.extract_geometry_features(mask_np, class_name)
-                vector.update(geom_feats)
-                # Extract radiomics features
-                rad_feats = self.extract_radiomics_features(img_np, mask_np, class_name)
-                vector.update(rad_feats)
-                
+                #rad_feats  = self.extract_radiomics_features(img_np, mask_np, class_name)
+                rad_feats  = {}  # radiomics disabled for now!!! *for speed*
 
-        return vector
+                return b, {**geom_feats, **rad_feats}
+
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                for b, feats in executor.map(run_radiomics, tasks):
+                    vectors[b].update(feats)
+
+        return vectors
 
 
-def build_split(csv_filename, output_filename, base_dir, models, segmentation_model, radiomics_extractor):
-    data_path = os.path.join(base_dir, "data", "CheXpert-v1.0-small")
-    csv_path = os.path.join(data_path, csv_filename)
+def build_split(csv_filename, output_filename, base_dir, models, segmentation_model, radiomics_extractor,
+                batch_size=16, num_workers=4):
+    # Set up paths
+    data_path   = os.path.join(base_dir, "data", "CheXpert-v1.0-small")
+    csv_path    = os.path.join(data_path, csv_filename)
     output_path = os.path.join(base_dir, "results", output_filename)
 
     print(f"\nProcessing split: {csv_filename}")
     print(f"Saving to: {output_path}")
+    print(f"Batch size: {batch_size} | DataLoader workers: {num_workers}")
 
+    # Initialize the feature vector builder with the models and extractor
     builder = FeatureVectorBuilder(
         models=models,
         segmentation_model=segmentation_model,
         radiomics_extractor=radiomics_extractor,
     )
-
+    # Use the same resizing transform as the models expect
     transform = xrv.datasets.XRayResizer(224)
 
+    # Create dataset and dataloader
     dataset = xrv.datasets.CheX_Dataset(
         imgpath=data_path,
         csvpath=csv_path,
         views=["PA", "AP"],
-        transform=transform
+        transform=transform,
+        unique_patients=False   # include all samples, even if they are from the same patient, to maximize data for C1
+    )
+    
+    print("Dataset samples (len(dataset)):", len(dataset))
+    print("Internal CSV length:", len(dataset.csv)) 
+
+
+    loader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True,
+        prefetch_factor=2 if num_workers > 0 else None,
     )
 
-    all_vectors = []
+    # Process batches and build vectors
+    all_vectors       = []
+    samples_processed = 0
 
-    # Go through each sample in the dataset and build the feature vector
-    for i in tqdm(range(len(dataset)), desc=f"Building {csv_filename}"):
+    for batch in tqdm(loader, desc=f"Building {csv_filename}"):
         try:
-            # Load image and path
-            sample = dataset[i]
-            row = dataset.csv.iloc[i]
-            img_path = row["Path"]
+            # Details of batch processing, I don't fully understand
+            img_tensors = batch['img'].float()  # (B, C, H, W)
+            B           = img_tensors.shape[0]
+            img_paths   = dataset.csv.iloc[samples_processed:samples_processed + B]['Path'].tolist()
+            img_nps     = [img_tensors[b, 0].numpy() for b in range(B)]
 
-            # Get the image array and convert to tensor
-            img_array = sample['img']
-            if len(img_array.shape) == 2:
-                img_np = img_array
-                img_tensor = torch.from_numpy(img_array).unsqueeze(0).float()
-            else:
-                img_np = img_array[0]
-                img_tensor = torch.from_numpy(img_array).float()
+            vectors = builder.build_vectors_batch(img_tensors, img_nps, img_paths, plot=False)
+            all_vectors.extend(vectors)
 
-            # Build the feature vector for this image
-            vector = builder.build_vector(img_tensor, img_np, img_path=img_path, plot=False)
-            # Add the vector to our list of all vectors
-            all_vectors.append(vector)
-
-        # Had some problems with some png, hopefully not too many, so we skip those and print a warning
         except Exception as e:
-            print(f"[SKIP] Failed to process {dataset.csv.iloc[i]['Path']}: {e}")
-            continue
+            print(f"[SKIP] Failed to process batch starting at index {samples_processed}: {e}")
 
-        # Save every 100 samples to not risk losing everything if something goes wrong, and also to have intermediate results to check
-        if (i + 1) % 100 == 0:
+        finally:
+            samples_processed += img_tensors.shape[0]
+
+        # Save checkpoint every ~500 samples to avoid losing progress and to monitor intermediate results
+        if samples_processed % 500 < batch_size:
             df_temp = pd.DataFrame(all_vectors)
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
             df_temp.to_csv(output_path, index=False)
             print(f"[INFO] Saved {len(df_temp)} samples so far to {output_path}")
-
-    # Save the final CSV at the end
+            
+    # Final save after all batches are processed
     df = pd.DataFrame(all_vectors)
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     df.to_csv(output_path, index=False)
@@ -262,30 +291,37 @@ def build_split(csv_filename, output_filename, base_dir, models, segmentation_mo
 
 
 def main():
+    # Determine base directory (one level up from this script)
     base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    print(f"Base directory: {base_dir}")
 
     print("Loading models...")
+    # Load the models from torchxrayvision. These are pretrained on CheXpert and will be used to predict age
     models = {
-        'age': xrv.baseline_models.riken.AgeModel(),
-        'sex': xrv.baseline_models.mira.SexModel(),
+        'age':  xrv.baseline_models.riken.AgeModel(),
+        'sex':  xrv.baseline_models.mira.SexModel(),
         'race': xrv.baseline_models.emory_hiti.RaceModel()
     }
-
-    segmentation_model = xrv.baseline_models.chestx_det.PSPNet()
+    segmentation_model  = xrv.baseline_models.chestx_det.PSPNet()
     radiomics_extractor = featureextractor.RadiomicsFeatureExtractor(force2D=True)
+    #radiomics_extractor.disableAllFeatures()
+    #radiomics_extractor.enableFeatureClassByName('firstorder')
+    #radiomics_extractor.enableFeatureClassByName('shape2D')
 
-    # Build train split 
     print("Building attribute vectors for training split...")
+    # First for the training split, we will build the attribute vectors by running the images through the models and extracting features. This will be saved to a new CSV file that will be used in the next steps of the pipeline.
     build_split(
         csv_filename="train.csv",
         output_filename="train_c1_attribute_vector.csv",
         base_dir=base_dir,
         models=models,
         segmentation_model=segmentation_model,
-        radiomics_extractor=radiomics_extractor
+        radiomics_extractor=radiomics_extractor,
+        batch_size=16,   # increase to 32/64 if GPU VRAM allows
+        num_workers=4,   # set to your CPU core count
     )
 
-    # Build validation split
+    # Then we will do the same for the validation split. This will allow us to have attribute vectors for both training and validation data, which can be used for analysis and model development in the next steps.
     print("Building attribute vectors for validation split...")
     build_split(
         csv_filename="valid.csv",
@@ -293,7 +329,9 @@ def main():
         base_dir=base_dir,
         models=models,
         segmentation_model=segmentation_model,
-        radiomics_extractor=radiomics_extractor
+        radiomics_extractor=radiomics_extractor,
+        batch_size=16,
+        num_workers=4,
     )
 
 if __name__ == "__main__":

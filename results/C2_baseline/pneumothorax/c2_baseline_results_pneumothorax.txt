@@ -1,0 +1,17 @@
+=== C2 Baseline Results Pneumothorax ===
+
+Feature      : C0 output probability (single disease)
+Model        : Logistic Regression (class_weight=balanced)
+
+                    precision    recall  f1-score   support
+
+  Wrong Prediction       0.20      0.22      0.21        93
+Correct Prediction       0.27      0.25      0.26       109
+
+          accuracy                           0.23       202
+         macro avg       0.23      0.23      0.23       202
+      weighted avg       0.24      0.23      0.23       202
+
+AUC          : 0.177
+Coefficients : {'prob': 0.2856613242328757}
+Intercept    : 0.0133

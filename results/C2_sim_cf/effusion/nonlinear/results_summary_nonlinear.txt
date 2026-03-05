@@ -1,0 +1,21 @@
+=== C2 Non-linear Model Results — effusion ===
+
+Train : 38,127  (correct: 28,175 | incorrect: 9,952)
+Valid : 161  (correct: 121 | incorrect: 40)
+
+| Model | Prob only | ΔA only | Prob + ΔA |
+|-------|-----------|---------|----------|
+| LR    | 0.537     | 0.571   | 0.511     |
+| RF    | 0.652     | 0.550   | 0.676     |
+| MLP   | 0.714     | 0.633   | 0.691     |
+Top 10 RF feature importances (combined):
+C0_prob                                    0.170795
+delta_Left Lung_perimeter                  0.029289
+delta_mediastinal_ratio                    0.026696
+delta_Mediastinum_area_pixels              0.025536
+delta_Left Hilus Pulmonis_area_pixels      0.025514
+delta_Left Hilus Pulmonis_bbox_ratio       0.025193
+delta_Facies Diaphragmatica_area_pixels    0.024973
+delta_lung_height_ratio                    0.024949
+delta_Right Hilus Pulmonis_bbox_ratio      0.024839
+delta_Mediastinum_perimeter                0.024819

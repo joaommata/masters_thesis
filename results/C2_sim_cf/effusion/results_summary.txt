@@ -1,0 +1,11 @@
+=== C2 Simulated Counterfactual Results — effusion ===
+
+Train size : 38,127  (correct: 28,175 | incorrect: 9,952)
+Valid size : 161  (correct: 121 | incorrect: 40)
+Features   : 36  ['lung_area_ratio', 'lung_height_ratio', 'lung_width_ratio', 'left_lung_fraction', 'right_lung_fraction', 'mediastinal_ratio', 'Left Lung_area_pixels', 'Left Lung_bbox_width', 'Left Lung_bbox_height', 'Left Lung_bbox_ratio', 'Left Lung_perimeter', 'Right Lung_area_pixels', 'Right Lung_bbox_width', 'Right Lung_bbox_height', 'Right Lung_bbox_ratio', 'Right Lung_perimeter', 'Left Hilus Pulmonis_area_pixels', 'Left Hilus Pulmonis_bbox_width', 'Left Hilus Pulmonis_bbox_height', 'Left Hilus Pulmonis_bbox_ratio', 'Left Hilus Pulmonis_perimeter', 'Facies Diaphragmatica_area_pixels', 'Facies Diaphragmatica_bbox_width', 'Facies Diaphragmatica_bbox_height', 'Facies Diaphragmatica_bbox_ratio', 'Facies Diaphragmatica_perimeter', 'Mediastinum_area_pixels', 'Mediastinum_bbox_width', 'Mediastinum_bbox_height', 'Mediastinum_bbox_ratio', 'Mediastinum_perimeter', 'Right Hilus Pulmonis_area_pixels', 'Right Hilus Pulmonis_bbox_width', 'Right Hilus Pulmonis_bbox_height', 'Right Hilus Pulmonis_bbox_ratio', 'Right Hilus Pulmonis_perimeter']
+
+ΔA magnitude — Correct: 2.5862  Incorrect: 2.3522  Δ: +0.2340
+
+| Model | Baseline (prob only) | ΔA only | Combined (prob + ΔA) |
+|-------|---------------------|---------|---------------------|
+| LR    | 0.537               | 0.571   | 0.511               |

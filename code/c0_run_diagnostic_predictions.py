@@ -27,7 +27,7 @@ from sklearn.metrics import roc_curve, roc_auc_score
 import matplotlib.pyplot as plt
 
 # ── Config ─────────────────────────────────────────────────────────────────────
-TARGET_DISEASE = "Pneumothorax"  # change this to run on a different disease
+TARGET_DISEASE = "Cardiomegaly"  # change this to run on a different disease
 
 BASE_DIR       = "/zhome/d0/a/221493/thesis"
 DATA_PATH      = os.path.join(BASE_DIR, "data/CheXpert-v1.0-small")
@@ -209,6 +209,13 @@ def main():
     print(f"Train AUC               : {auc:.3f}")
     print(f"Optimal threshold       : {optimal_thresh:.4f}\n")
 
+    # SEPARATING THE CALIBRATION SPLIT FROM THE TRAINING SPLIT IS IMPORTANT TO AVOID OVERFITTING THE THRESHOLD TO THE TRAINING DATA — THIS WAS A BUG IN THE ORIGINAL VERSION
+    calib_df = train_clean.sample(frac=0.1, random_state=42)
+    c2_train_df = train_clean.drop(calib_df.index)
+
+    optimal_thresh, auc = find_optimal_threshold(calib_df)
+    
+    # Apply to all splits — threshold is now independent of C2 training data
     train_clean = apply_threshold(train_clean, optimal_thresh)
     valid_clean = apply_threshold(valid_clean, optimal_thresh)
 

@@ -99,6 +99,7 @@ class FeatureVectorBuilder:
         try:
             feats = self.extractor.execute(img_sitk, mask_sitk)
             feats = {f"{class_name}_{k}": v for k, v in feats.items() if not k.startswith("diagnostics_")}
+        
         # This can fail for various reasons (e.g. if the mask is not valid, if the image has too few pixels, etc.) so we wrap it in a try-except block to catch any errors and continue processing other classes/images.
         except Exception as e:
             print(f"[ERROR] Failed to extract features for {class_name}: {e}")
@@ -199,9 +200,13 @@ class FeatureVectorBuilder:
 
             def run_radiomics(args):
                 b, class_name, img_np, mask_np = args
+                
+                ## WE ARE MAKING A SMALLER SIMPLER VERSION FIRST TO SPEED UP PROCESSING AND TEST THE PIPELINE. THIS CAN BE EXPANDED LATER TO INCLUDE MORE FEATURES IF NEEDED.
+                
+                # Geometry on everything - it's essentially free
                 geom_feats = self.extract_geometry_features(mask_np, class_name)
-                #rad_feats  = self.extract_radiomics_features(img_np, mask_np, class_name)
-                rad_feats  = {}  # radiomics disabled for now!!! *for speed*
+                
+                rad_feats = self.extract_radiomics_features(img_np, mask_np, class_name)
 
                 return b, {**geom_feats, **rad_feats}
 
@@ -217,7 +222,7 @@ def build_split(csv_filename, output_filename, base_dir, models, segmentation_mo
     # Set up paths
     data_path   = os.path.join(base_dir, "data", "CheXpert-v1.0-small")
     csv_path    = os.path.join(data_path, csv_filename)
-    output_path = os.path.join(base_dir, "results", output_filename)
+    output_path = os.path.join(base_dir, "results/C1_attributes", output_filename)
 
     print(f"\nProcessing split: {csv_filename}")
     print(f"Saving to: {output_path}")
@@ -242,11 +247,35 @@ def build_split(csv_filename, output_filename, base_dir, models, segmentation_mo
     )
     
     print("Dataset samples (len(dataset)):", len(dataset))
-    print("Internal CSV length:", len(dataset.csv)) 
+    print("Internal CSV length:", len(dataset.csv))
 
+    # ── Resume from checkpoint if one exists ─────────────────────────────────
+    all_vectors = []
+    start_index = 0
+    if os.path.exists(output_path):
+        df_existing = pd.read_csv(output_path)
+        if len(df_existing) > 0:
+            already_done = set(df_existing["path"].tolist())
+            all_vectors  = df_existing.to_dict("records")
+            # Find the highest sequential index we can safely resume from
+            # (last path in dataset order that is in the checkpoint)
+            dataset_paths = dataset.csv["Path"].tolist()
+            for i, p in enumerate(dataset_paths):
+                if p in already_done:
+                    start_index = i + 1
+                else:
+                    break
+            print(f"[RESUME] Found checkpoint with {len(df_existing):,} samples.")
+            print(f"[RESUME] Resuming from dataset index {start_index:,} (skipping first {start_index:,} images).")
+    else:
+        print("[INFO] No checkpoint found, starting from scratch.")
+
+    # Subset the dataset to only unprocessed samples
+    remaining_indices = list(range(start_index, len(dataset)))
+    subset = torch.utils.data.Subset(dataset, remaining_indices)
 
     loader = DataLoader(
-        dataset,
+        subset,
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
@@ -254,9 +283,7 @@ def build_split(csv_filename, output_filename, base_dir, models, segmentation_mo
         prefetch_factor=2 if num_workers > 0 else None,
     )
 
-    # Process batches and build vectors
-    all_vectors       = []
-    samples_processed = 0
+    samples_processed = start_index  # keep absolute index for path lookup
 
     for batch in tqdm(loader, desc=f"Building {csv_filename}"):
         try:
@@ -281,7 +308,7 @@ def build_split(csv_filename, output_filename, base_dir, models, segmentation_mo
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
             df_temp.to_csv(output_path, index=False)
             print(f"[INFO] Saved {len(df_temp)} samples so far to {output_path}")
-            
+        
     # Final save after all batches are processed
     df = pd.DataFrame(all_vectors)
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -304,15 +331,15 @@ def main():
     }
     segmentation_model  = xrv.baseline_models.chestx_det.PSPNet()
     radiomics_extractor = featureextractor.RadiomicsFeatureExtractor(force2D=True)
-    #radiomics_extractor.disableAllFeatures()
-    #radiomics_extractor.enableFeatureClassByName('firstorder')
-    #radiomics_extractor.enableFeatureClassByName('shape2D')
+    radiomics_extractor.disableAllFeatures()
+    radiomics_extractor.enableFeatureClassByName('firstorder')
+    radiomics_extractor.enableFeatureClassByName('shape2D')
 
     print("Building attribute vectors for training split...")
     # First for the training split, we will build the attribute vectors by running the images through the models and extracting features. This will be saved to a new CSV file that will be used in the next steps of the pipeline.
     build_split(
         csv_filename="train.csv",
-        output_filename="train_c1_attribute_vector.csv",
+        output_filename="train_c1_attribute_vector_rad.csv",
         base_dir=base_dir,
         models=models,
         segmentation_model=segmentation_model,
@@ -325,7 +352,7 @@ def main():
     print("Building attribute vectors for validation split...")
     build_split(
         csv_filename="valid.csv",
-        output_filename="valid_c1_attribute_vector.csv",
+        output_filename="valid_c1_attribute_vector_rad.csv",
         base_dir=base_dir,
         models=models,
         segmentation_model=segmentation_model,

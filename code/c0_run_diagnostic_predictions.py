@@ -27,7 +27,7 @@ from sklearn.metrics import roc_curve, roc_auc_score
 import matplotlib.pyplot as plt
 
 # ── Config ─────────────────────────────────────────────────────────────────────
-TARGET_DISEASE = "Cardiomegaly"  # change this to run on a different disease
+TARGET_DISEASE = "Effusion"  # change this to run on a different disease
 
 BASE_DIR       = "/zhome/d0/a/221493/thesis"
 DATA_PATH      = os.path.join(BASE_DIR, "data/CheXpert-v1.0-small")
@@ -74,7 +74,7 @@ def collate_skip_none(batch):
 
 # ── Inference ──────────────────────────────────────────────────────────────────
 
-def run_c0(model, dataset, disease_idx, split_name):
+def run_c0(model, dataset, disease_idx, split_name, embeddings_cache):
     """Run C0 on a dataset split and return a raw DataFrame (no thresholding yet)."""
 
     loader = DataLoader(
@@ -95,19 +95,24 @@ def run_c0(model, dataset, disease_idx, split_name):
         labels = batch["lab"].numpy()
         paths  = batch["path"]
 
+
         with torch.no_grad():
-            probs = torch.sigmoid(model(images))
+            probs = torch.sigmoid(model(images))  # hook fires here, embeddings_cache['last'] is now populated
 
         disease_probs = probs[:, disease_idx].cpu().numpy()
         disease_true  = labels[:, disease_idx]
+        emb_batch     = embeddings_cache['last']  # (B, 1024)
 
         for i in range(len(paths)):
-            rows.append({
+            row = {
                 "path": paths[i],
                 "prob": disease_probs[i],
                 "true": disease_true[i],
-            })
-
+            }
+            for j, val in enumerate(emb_batch[i]):
+                row[f"emb_{j}"] = val
+            rows.append(row)
+            
     return pd.DataFrame(rows)
 
 
@@ -141,6 +146,12 @@ def main():
     model = xrv.models.DenseNet(weights="densenet121-res224-chex")
     model = model.to(DEVICE)
     model.eval()
+
+    # --- ADDED HOOK TO SAVE THE LAST LAYER BEFORE LINEAR CLASSIFIER --- 
+    embeddings_cache = {}
+    def hook_fn(module, input, output):
+        embeddings_cache['last'] = output.mean(dim=[2, 3]).cpu().numpy()  # (B, 1024, 7, 7) → (B, 1024)
+    model.features.register_forward_hook(hook_fn)
 
     disease_idx = model.pathologies.index(TARGET_DISEASE)
     print(f"'{TARGET_DISEASE}' → output index {disease_idx}\n")
@@ -195,8 +206,8 @@ def main():
     # ----------------------
 
     # Run inference 
-    train_df = run_c0(model, train_dataset, disease_idx, "train")
-    valid_df = run_c0(model, valid_dataset, disease_idx, "valid")
+    train_df = run_c0(model, train_dataset, disease_idx, "train", embeddings_cache)
+    valid_df = run_c0(model, valid_dataset, disease_idx, "valid", embeddings_cache)
 
     # Drop NaN and uncertain (-1) labels — these cannot be used as C2 supervision - THIS ONLY DOES IT FOR THE TARGET DISEASE
     train_clean = train_df[train_df["true"].isin([0.0, 1.0])].copy()
@@ -208,13 +219,7 @@ def main():
     optimal_thresh, auc = find_optimal_threshold(train_clean)
     print(f"Train AUC               : {auc:.3f}")
     print(f"Optimal threshold       : {optimal_thresh:.4f}\n")
-
-    # SEPARATING THE CALIBRATION SPLIT FROM THE TRAINING SPLIT IS IMPORTANT TO AVOID OVERFITTING THE THRESHOLD TO THE TRAINING DATA — THIS WAS A BUG IN THE ORIGINAL VERSION
-    calib_df = train_clean.sample(frac=0.1, random_state=42)
-    c2_train_df = train_clean.drop(calib_df.index)
-
-    optimal_thresh, auc = find_optimal_threshold(calib_df)
-    
+        
     # Apply to all splits — threshold is now independent of C2 training data
     train_clean = apply_threshold(train_clean, optimal_thresh)
     valid_clean = apply_threshold(valid_clean, optimal_thresh)

@@ -84,11 +84,14 @@ class FeatureVectorBuilder:
 
         # Safeguards against empty or too small masks which can cause radiomics extraction to fail. 
         # This can happen if the segmentation model fails to detect the class in the image.
-        if mask_resized.sum() == 0:
-            print(f"[SKIP] {class_name} mask is empty.")
+        if mask_resized.ndim != 2:
             return {}
-        if mask_resized.shape[0] < 2 or mask_resized.shape[1] < 2:
-            print(f"[SKIP] {class_name} mask too small: {mask_resized.shape}")
+        if mask_resized.sum() < 10:
+            print(f"[SKIP] {class_name} mask is empty or too small.")
+            return {}
+        ys, xs = np.where(mask_resized > 0)
+        if (ys.max() - ys.min()) < 2 or (xs.max() - xs.min()) < 2:
+            print(f"[SKIP] {class_name} mask has no 2D extent.")
             return {}
         
         # Convert to SimpleITK images for radiomics. Radiomics expects the image and mask to be in a specific format, so we need to convert our numpy arrays to SimpleITK images. 

@@ -21,7 +21,7 @@ logger.setLevel(logging.ERROR)
 
 
 # ── Configure which NEW feature classes you want to add ──────────────────────
-NEW_FEATURE_CLASSES = ['glcm', 'glrlm', 'glszm', 'ngtdm', 'gldm']  # add/remove as needed
+NEW_FEATURE_CLASSES = ['glcm']  # add/remove as needed
 # ─────────────────────────────────────────────────────────────────────────────
 
 

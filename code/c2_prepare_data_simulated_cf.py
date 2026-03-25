@@ -39,6 +39,8 @@ RESULTS_DIR = os.path.join(BASE_DIR, "results")
 OUTPUT_DIR  = os.path.join(RESULTS_DIR, f"C2_sim_cf/{DISEASE.lower()}")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+# Define the number of nearest neighbours to retrieve (k=1 for single CF)
+cf_count = 1
 # ══════════════════════════════════════════════════════════════════════════════
 
 disease_prob_col = f"{DISEASE.lower()}_prob"
@@ -140,6 +142,14 @@ idx_pred1_incorr = (train_preds == 1) & (train_correct == 0)
 idx_pred0_corr   = (train_preds == 0) & (train_correct == 1)
 idx_pred0_incorr = (train_preds == 0) & (train_correct == 0)
 
+# Pool id to global idx mapping for retrieving paths later
+pool_global_idx = {
+    'pred1_corr':   np.where(idx_pred1_corr)[0],
+    'pred1_incorr': np.where(idx_pred1_incorr)[0],
+    'pred0_corr':   np.where(idx_pred0_corr)[0],
+    'pred0_incorr': np.where(idx_pred0_incorr)[0],
+}
+
 # Extract the scaled relevant attributes for each pool to build separate NN models
 train_scaled_pred1_corr   = train_scaled[idx_pred1_corr]
 train_scaled_pred1_incorr = train_scaled[idx_pred1_incorr]
@@ -153,10 +163,10 @@ train_prob_pred0_corr   = train_clean[disease_prob_col].values[idx_pred0_corr]
 train_prob_pred0_incorr = train_clean[disease_prob_col].values[idx_pred0_incorr]
 
 # The neighbour is *always* selected from the Train set since we don't "know" the correctness of the samples in the test set
-nn_pred1_corr   = NearestNeighbors(n_neighbors=1, metric=metric, n_jobs=-1).fit(train_scaled_pred1_corr)
-nn_pred1_incorr = NearestNeighbors(n_neighbors=1, metric=metric, n_jobs=-1).fit(train_scaled_pred1_incorr)
-nn_pred0_corr   = NearestNeighbors(n_neighbors=1, metric=metric, n_jobs=-1).fit(train_scaled_pred0_corr)
-nn_pred0_incorr = NearestNeighbors(n_neighbors=1, metric=metric, n_jobs=-1).fit(train_scaled_pred0_incorr)
+nn_pred1_corr   = NearestNeighbors(n_neighbors=cf_count, metric=metric, n_jobs=-1).fit(train_scaled_pred1_corr)
+nn_pred1_incorr = NearestNeighbors(n_neighbors=cf_count, metric=metric, n_jobs=-1).fit(train_scaled_pred1_incorr)
+nn_pred0_corr   = NearestNeighbors(n_neighbors=cf_count, metric=metric, n_jobs=-1).fit(train_scaled_pred0_corr)
+nn_pred0_incorr = NearestNeighbors(n_neighbors=cf_count, metric=metric, n_jobs=-1).fit(train_scaled_pred0_incorr)
 
 print(f"\nNN pools built ({DISTANCE.upper()}):")
 print(f"  pred=1, correct   : {idx_pred1_corr.sum():,}")
@@ -174,45 +184,60 @@ def compute_diff_vectors(df, query_scaled,
                          train_scaled_pred1_corr, train_scaled_pred1_incorr,
                          train_scaled_pred0_corr, train_scaled_pred0_incorr,
                          train_prob_pred1_corr, train_prob_pred1_incorr,
-                         train_prob_pred0_corr, train_prob_pred0_incorr):
+                         train_prob_pred0_corr, train_prob_pred0_incorr,
+                         train_paths,        # <-- pass train_clean["path"].values
+                         pool_global_idx):   # <-- pass the dict above
+
     query_preds   = df[disease_pred_col].values.astype(int)
     query_correct = df["correct"].values.astype(int)
     n, d          = query_scaled.shape
     diff_vecs     = np.empty((n, d), dtype=np.float64)
     cf_probs      = np.empty(n, dtype=np.float64)
+    # Each row: up to cf_count paths, separated by | so it fits in one CSV column
+    cf_paths      = np.empty(n, dtype=object)
+
+    # Helper: given pool-local idxs (n_query x k), recover paths from train_clean
+    def get_cf_paths(idxs, pool_key):
+        global_idxs = pool_global_idx[pool_key][idxs]  # (n_query, k)
+        return np.array([
+            "|".join(train_paths[row]) for row in global_idxs
+        ])
 
     # pred=1, correct=1 → search in pred=0, correct=1
     mask = (query_preds == 1) & (query_correct == 1)
     if mask.any():
         _, idxs = nn_pred0_corr.kneighbors(query_scaled[mask])
-        diff_vecs[mask] = query_scaled[mask] - train_scaled_pred0_corr[idxs[:, 0]]
-        cf_probs[mask]  = train_prob_pred0_corr[idxs[:, 0]]
+        diff_vecs[mask]  = (query_scaled[mask][:, np.newaxis, :] - train_scaled_pred0_corr[idxs]).mean(axis=1)
+        cf_probs[mask]   = train_prob_pred0_corr[idxs].mean(axis=1)
+        cf_paths[mask]   = get_cf_paths(idxs, 'pred0_corr')
 
     # pred=1, correct=0 → search in pred=0, correct=0
     mask = (query_preds == 1) & (query_correct == 0)
     if mask.any():
         _, idxs = nn_pred0_incorr.kneighbors(query_scaled[mask])
-        diff_vecs[mask] = query_scaled[mask] - train_scaled_pred0_incorr[idxs[:, 0]]
-        cf_probs[mask]  = train_prob_pred0_incorr[idxs[:, 0]]
+        diff_vecs[mask]  = (query_scaled[mask][:, np.newaxis, :] - train_scaled_pred0_incorr[idxs]).mean(axis=1)
+        cf_probs[mask]   = train_prob_pred0_incorr[idxs].mean(axis=1)
+        cf_paths[mask]   = get_cf_paths(idxs, 'pred0_incorr')
 
     # pred=0, correct=1 → search in pred=1, correct=1
     mask = (query_preds == 0) & (query_correct == 1)
     if mask.any():
         _, idxs = nn_pred1_corr.kneighbors(query_scaled[mask])
-        diff_vecs[mask] = query_scaled[mask] - train_scaled_pred1_corr[idxs[:, 0]]
-        cf_probs[mask]  = train_prob_pred1_corr[idxs[:, 0]]
+        diff_vecs[mask]  = (query_scaled[mask][:, np.newaxis, :] - train_scaled_pred1_corr[idxs]).mean(axis=1)
+        cf_probs[mask]   = train_prob_pred1_corr[idxs].mean(axis=1)
+        cf_paths[mask]   = get_cf_paths(idxs, 'pred1_corr')
 
     # pred=0, correct=0 → search in pred=1, correct=0
     mask = (query_preds == 0) & (query_correct == 0)
     if mask.any():
         _, idxs = nn_pred1_incorr.kneighbors(query_scaled[mask])
-        diff_vecs[mask] = query_scaled[mask] - train_scaled_pred1_incorr[idxs[:, 0]]
-        cf_probs[mask]  = train_prob_pred1_incorr[idxs[:, 0]]
+        diff_vecs[mask]  = (query_scaled[mask][:, np.newaxis, :] - train_scaled_pred1_incorr[idxs]).mean(axis=1)
+        cf_probs[mask]   = train_prob_pred1_incorr[idxs].mean(axis=1)
+        cf_paths[mask]   = get_cf_paths(idxs, 'pred1_incorr')
 
-    return diff_vecs, cf_probs
+    return diff_vecs, cf_probs, cf_paths
 
-# Compute the ΔA difference vectors for train and valid sets, along with the probabilities of the matched CFs
-train_diff, train_cf_probs = compute_diff_vectors(
+train_diff, train_cf_probs, train_cf_paths = compute_diff_vectors(
     train_clean, train_scaled,
     nn_pred1_corr, nn_pred1_incorr,
     nn_pred0_corr, nn_pred0_incorr,
@@ -220,8 +245,11 @@ train_diff, train_cf_probs = compute_diff_vectors(
     train_scaled_pred0_corr, train_scaled_pred0_incorr,
     train_prob_pred1_corr, train_prob_pred1_incorr,
     train_prob_pred0_corr, train_prob_pred0_incorr,
+    train_clean["path"].values,  # <-- new
+    pool_global_idx,             # <-- new
 )
-valid_diff, valid_cf_probs = compute_diff_vectors(
+
+valid_diff, valid_cf_probs, valid_cf_paths = compute_diff_vectors(
     valid_clean, valid_scaled,
     nn_pred1_corr, nn_pred1_incorr,
     nn_pred0_corr, nn_pred0_incorr,
@@ -229,9 +257,9 @@ valid_diff, valid_cf_probs = compute_diff_vectors(
     train_scaled_pred0_corr, train_scaled_pred0_incorr,
     train_prob_pred1_corr, train_prob_pred1_incorr,
     train_prob_pred0_corr, train_prob_pred0_incorr,
+    train_clean["path"].values,  # <-- same, always train paths
+    pool_global_idx,             # <-- same
 )
-diff_col_names = [f"delta_{c}" for c in relevant_cols]
-print(f"ΔA shape — train: {train_diff.shape}  valid: {valid_diff.shape}")
 
 
 # ── Sanity check: is the ΔA magnitude different for correct/incorrect? ─────────
@@ -247,6 +275,8 @@ print(f"\n  If Correct > Incorrect → the signal is working as hypothesised.")
 
 
 # ── Save enriched dataframes and scaler ──────────────────────────────────────
+diff_col_names = [f"delta_{c}" for c in relevant_cols]
+
 
 train_out = train_clean.copy()
 valid_out = valid_clean.copy()
@@ -257,10 +287,13 @@ for i, col in enumerate(diff_col_names):
 # Save the probs for the found CF
 train_out['cf_prob'] = train_cf_probs
 valid_out['cf_prob'] = valid_cf_probs
-  
 
-train_out.to_csv(os.path.join(OUTPUT_DIR, "train_with_diff_vectors.csv"), index=False)
-valid_out.to_csv(os.path.join(OUTPUT_DIR, "valid_with_diff_vectors.csv"), index=False)
-joblib.dump(attr_scaler, os.path.join(OUTPUT_DIR, "attr_scaler.pkl"))
+# Save the paths of the found CFs (pipe-separated if multiple) for manual inspection later
+train_out['cf_paths'] = train_cf_paths
+valid_out['cf_paths'] = valid_cf_paths
+
+train_out.to_csv(os.path.join(OUTPUT_DIR, f"train_with_diff_vectors_{cf_count}.csv"), index=False)
+valid_out.to_csv(os.path.join(OUTPUT_DIR, f"valid_with_diff_vectors_{cf_count}.csv"), index=False)
+joblib.dump(attr_scaler, os.path.join(OUTPUT_DIR, f"attr_scaler_{cf_count}.pkl"))
 
 print(f"\nAll outputs saved → {OUTPUT_DIR}")

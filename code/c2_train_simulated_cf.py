@@ -1,8 +1,7 @@
 """
 c2_train_simulated_cf.py
 ========================
-Trains LR, RF and MLP models for C2 quality control, comparing all eleven
-input configurations for each model:
+Trains LR, RF and MLP models for C2 quality control, comparing all eleven input configurations for each model:
     B1 — prob only
     B2 — original attributes only
     B3 — embeddings only
@@ -15,24 +14,21 @@ input configurations for each model:
     M5 — prob + ΔA + attributes + embeddings
     M6 — prob + ΔA + attributes + CF prob
 
-Assumes c2_prepare_data.py has already been run and saved:
-    - train_with_diff_vectors.csv
-    - valid_with_diff_vectors.csv
-    (these contain diff vectors, embeddings, attrs, and cf_prob)
+Assumes c2_prepare_data_simulated_cf.py has already been run and saved:
+    - train_with_diff_vectors_{cf_count}.csv
+    - valid_with_diff_vectors_{cf_count}.csv
 
 Outputs (saved to results/C2_sim_cf/{disease}/):
-    - roc_data.json
-    - results_summary.txt
-    lr/
+    - roc_data_{cf_count}.json
+    - results_summary_{cf_count}.txt
+    cf{cf_count}_lr/
         - roc_lr.png
-        - roc_best_per_model.png
         - lr_{config}_model.pkl
         - lr_{config}_scaler.pkl
-    rf/
+    cf{cf_count}_rf/
         - roc_rf.png
-        - rf_feature_importances.png
         - rf_{config}_model.pkl
-    mlp/
+    cf{cf_count}_mlp/
         - roc_mlp.png
         - mlp_{config}_model.pkl
         - mlp_{config}_scaler.pkl
@@ -62,16 +58,24 @@ from plot_config import PLOT_COLORS, PLOT_LS, PLOT_LW
 
 DISEASE  = 'effusion'   # effusion | pneumothorax | cardiomegaly | atelectasis
 BASE_DIR = '/zhome/d0/a/221493/thesis/'
-RUN_CV   = True        # set True to enable 5-fold cross-validation (slow)
+RUN_CV   = False        # set True to enable 5-fold cross-validation (slow)
 
+cf_count = 1
+UNMATCHED = True
 # ══════════════════════════════════════════════════════════════════════════════
 
 # Setup paths for use later
 RESULTS_DIR  = os.path.join(BASE_DIR, 'results')
 INPUT_DIR    = os.path.join(RESULTS_DIR, f'C2_sim_cf/{DISEASE}')
-LR_DIR       = os.path.join(INPUT_DIR, 'lr')
-RF_DIR       = os.path.join(INPUT_DIR, 'rf')
-MLP_DIR      = os.path.join(INPUT_DIR, 'mlp')
+LR_DIR       = os.path.join(INPUT_DIR, f'cf{cf_count}_lr')
+RF_DIR       = os.path.join(INPUT_DIR, f'cf{cf_count}_rf')
+MLP_DIR      = os.path.join(INPUT_DIR, f'cf{cf_count}_mlp')
+
+# If using unmatched CF examples, change the input and output dirs accordingly.
+if UNMATCHED:
+    LR_DIR       = os.path.join(INPUT_DIR, f'cf{cf_count}_unmatched_lr')
+    RF_DIR       = os.path.join(INPUT_DIR, f'cf{cf_count}_unmatched_rf')
+    MLP_DIR      = os.path.join(INPUT_DIR, f'cf{cf_count}_unmatched_mlp')
 
 # Create output dirs if they don't exist
 os.makedirs(LR_DIR,  exist_ok=True)
@@ -80,6 +84,11 @@ os.makedirs(MLP_DIR, exist_ok=True)
 
 # Get the name of the disease column
 disease_prob_col = f"{DISEASE.lower()}_prob"
+
+# Define the name suffix for files based on whether we're using unmatched CF examples or not. 
+# This is just to keep track of which results correspond to which CF generation method. 
+# If UNMATCHED is True, it means we used the "unmatched" CF examples (these are generated without enforcing that the CF example is correctly assigned its class).
+suffix = f"_{cf_count}_unmatched" if UNMATCHED else f"_{cf_count}"
 
 # All configs — keys match plot_config.py
 CONFIGS = ['B1', 'B2', 'B3', 'B4', 'B5', 'M1', 'M2', 'M3', 'M4', 'M5', 'M6']
@@ -279,8 +288,8 @@ def main():
     #   - ΔA columns: delta_{attr} for each attr column (e.g. delta_lung_area) between original and CF
     #   - CF prob column: cf_prob = model's predicted probability for the found CF example
     
-    train_df = pd.read_csv(os.path.join(INPUT_DIR, 'train_with_diff_vectors.csv'))
-    valid_df = pd.read_csv(os.path.join(INPUT_DIR, 'valid_with_diff_vectors.csv'))
+    train_df = pd.read_csv(os.path.join(INPUT_DIR, f'train_with_diff_vectors{suffix}.csv')) # suffix is either _{cf_count}_unmatched or _{cf_count} depending on whether we're using unmatched CF examples or not
+    valid_df = pd.read_csv(os.path.join(INPUT_DIR, f'valid_with_diff_vectors{suffix}.csv'))
 
     # Identify column groups and divide so we can easily create feature matrices for each config. We use the following naming conventions:
     # - ΔA features start with 'delta_'
@@ -369,7 +378,7 @@ def main():
                 'cv_mean': float(res[tag]['cv_mean']),
                 'cv_std':  float(res[tag]['cv_std']),
             }
-    roc_save_path = os.path.join(INPUT_DIR, 'roc_data.json')
+    roc_save_path = os.path.join(INPUT_DIR, f'roc_data{suffix}.json')
     with open(roc_save_path, 'w') as f:
         json.dump(roc_data, f, indent=2)
     print(f"ROC data saved → {roc_save_path}")
@@ -394,7 +403,7 @@ def main():
         summary += "\n"
         
     print("\n" + summary)
-    with open(os.path.join(INPUT_DIR, 'results_summary.txt'), 'w') as f:
+    with open(os.path.join(INPUT_DIR, f'results_summary{suffix}.txt'), 'w') as f:
         f.write(summary)
 
     # ── Save models ───────────────────────────────────────────────────────────

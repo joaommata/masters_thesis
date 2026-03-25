@@ -1,7 +1,7 @@
 #!/bin/bash
-#BSUB -J train_C2_models_CV
-#BSUB -o /zhome/d0/a/221493/thesis/logs/train_C2_models_CV%J.out
-#BSUB -e /zhome/d0/a/221493/thesis/logs/train_C2_models_CV%J.err
+#BSUB -J train_C2_models_1_unmatched
+#BSUB -o /zhome/d0/a/221493/thesis/logs/train_C2_models_1_unmatched%J.out
+#BSUB -e /zhome/d0/a/221493/thesis/logs/train_C2_models_1_unmatched%J.err
 #BSUB -q hpc
 #BSUB -n 8
 #BSUB -R "rusage[mem=32GB]"

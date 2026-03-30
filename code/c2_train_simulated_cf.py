@@ -299,7 +299,7 @@ def main():
     diff_cols = [c for c in train_df.columns if c.startswith('delta_')]
     emb_cols  = [c for c in train_df.columns if c.startswith('emb_')]
     meta_cols = {disease_prob_col, f"{DISEASE.lower()}_pred", f"{DISEASE.lower()}_true",
-                'correct', 'path', 'patient_id', 'cf_prob'}
+                'correct', 'path', 'patient_id', 'cf_prob', 'cf_paths'}# cf_paths is a new column that contains the path to the CF example found for each original example (this is just for other analysis and isn't used as a feature)
     attr_cols = [c for c in train_df.columns
                  if c not in meta_cols
                  and not c.startswith('delta_')
@@ -417,7 +417,6 @@ def main():
         joblib.dump(mlp_res[tag]['scaler'], os.path.join(MLP_DIR, f'mlp_{tag.lower()}_scaler.pkl'))
 
     print(f"\nAll outputs saved → {INPUT_DIR}")
-
 
 if __name__ == "__main__":
     main()

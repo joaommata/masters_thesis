@@ -33,7 +33,7 @@ from plot_config import PLOT_COLORS
 # ══════════════════════════════════════════════════════════════════════════════
 
 DISEASE    = 'effusion'
-CF_COUNT   = 5                            # number of CF neighbours used in data prep
+CF_COUNT   = 1                            # number of CF neighbours used in data prep
 BASE_DIR   = '/zhome/d0/a/221493/thesis'
 THRESHOLDS = np.arange(0.1, 1.0, 0.1)    # operating thresholds for rejection analysis
 
@@ -87,7 +87,7 @@ def get_feature_matrices(valid_df, train_df):
     """
     meta_cols = {
         disease_prob_col, f'{DISEASE}_pred', f'{DISEASE}_true',
-        'correct', 'path', 'patient_id', 'cf_prob'  
+        'correct', 'path', 'patient_id', 'cf_prob', 'cf_paths'
     }
     diff_cols = [c for c in train_df.columns if c.startswith('delta_')]
     emb_cols  = [c for c in train_df.columns if c.startswith('emb_')]
@@ -216,6 +216,16 @@ def plot_roc_curves():
         'axes.spines.top': False, 'axes.spines.right': False,
     })
 
+    plt.rcParams.update({
+    'font.size': 17,
+    'axes.linewidth': 1.2,
+    'axes.titlesize': 18,
+    'axes.labelsize': 16,
+    'xtick.labelsize': 14,
+    'ytick.labelsize': 14,
+    'legend.fontsize': 15,
+})
+
     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
     model_full_names = {'LR': 'Logistic Regression', 'RF': 'Random Forest', 'MLP': 'Multilayer Perceptron'}
 
@@ -282,6 +292,10 @@ def plot_rejection_analysis(valid_df, model_probs):
             acc_rows.append({
                 'threshold':         round(thresh, 2),
                 'rejected_pct':      flagged.mean() * 100,
+                'rejected_n':        flagged.sum(),
+                'accepted_n':        acc_total,
+                'accuracy_correct_n': acc_correct,
+                'accuracy_total_n':   acc_total,
                 'accepted_accuracy': acc_correct / acc_total * 100 if acc_total > 0 else 0,
             })
 
@@ -291,15 +305,28 @@ def plot_rejection_analysis(valid_df, model_probs):
             tn = ((c0_preds == 0) & (c0_true == 0) & accepted).sum()
             fn = ((c0_preds == 0) & (c0_true == 1) & accepted).sum()
             err_rows.append({
-                'threshold':    round(thresh, 2),
-                'rejected_pct': flagged.mean() * 100,
-                'fpr':          fp / (fp + tn) * 100 if (fp + tn) > 0 else 0,
-                'fnr':          fn / (fn + tp) * 100 if (fn + tp) > 0 else 0,
-            })
+            'threshold':    round(thresh, 2),
+            'rejected_pct': flagged.mean() * 100,
+            'tp': tp,
+            'fp': fp,
+            'tn': tn,
+            'fn': fn,
+            'fpr': fp / (fp + tn) * 100 if (fp + tn) > 0 else 0,
+            'fnr': fn / (fn + tp) * 100 if (fn + tp) > 0 else 0,
+        })
 
         acc_df = pd.DataFrame(acc_rows)
         err_df = pd.DataFrame(err_rows)
 
+        plt.rcParams.update({
+    'font.size': 17,
+    'axes.linewidth': 1.2,
+    'axes.titlesize': 18,
+    'axes.labelsize': 16,
+    'xtick.labelsize': 14,
+    'ytick.labelsize': 14,
+    'legend.fontsize': 15,
+})
         # ── Figure (a): accuracy ──────────────────────────────────────────────
         fig, ax1 = plt.subplots(figsize=(7, 6))
         ax2 = ax1.twinx()

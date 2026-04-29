@@ -318,6 +318,97 @@ def compute_cf_for_split(train_df, test_df, cf_count, disease, distance="l1"):
     return train_out, test_out, attr_scaler
 
 
+# VERSION FOR UNMATCHED TEST:
+def compute_cf_for_split_unmatched(train_df, test_df, cf_count, disease, distance="l1"):
+    """
+    Same interface as compute_cf_for_split() but uses unmatched pools.
+    CF candidates are selected by opposite prediction only — correctness ignored.
+    Used as an ablation to show the matched strategy is necessary.
+    """
+    disease_prob_col, disease_pred_col, disease_true_col = _get_disease_cols(disease)
+
+    train_df = add_clinical_ratios(train_df.copy())
+    test_df  = add_clinical_ratios(test_df.copy())
+
+    meta_cols = {disease_prob_col, disease_pred_col, disease_true_col,
+                 "correct", "path", "patient_id"}
+    emb_cols  = [c for c in train_df.columns if c.startswith("emb_")]
+    relevant_cols = [c for c in train_df.columns
+                     if c not in meta_cols and c not in emb_cols]
+
+    train_clean = train_df.copy()
+    test_clean  = test_df.copy()
+    train_clean[relevant_cols] = train_clean[relevant_cols].fillna(0)
+    test_clean[relevant_cols]  = test_clean[relevant_cols].fillna(0)
+
+    # Scaler fit on train only — same as matched version
+    attr_scaler  = StandardScaler()
+    train_scaled = attr_scaler.fit_transform(train_clean[relevant_cols].values.astype(float))
+    test_scaled  = attr_scaler.transform(test_clean[relevant_cols].values.astype(float))
+
+    metric = "manhattan" if distance == "l1" else "euclidean"
+    train_preds = train_clean[disease_pred_col].values.astype(int)
+
+    # 2 pools instead of 4 — correctness not enforced
+    idx_pred1 = (train_preds == 1)
+    idx_pred0 = (train_preds == 0)
+
+    pool_global_idx = {
+        'pred1': np.where(idx_pred1)[0],
+        'pred0': np.where(idx_pred0)[0],
+    }
+
+    train_scaled_pred1 = train_scaled[idx_pred1]
+    train_scaled_pred0 = train_scaled[idx_pred0]
+    train_prob_pred1   = train_clean[disease_prob_col].values[idx_pred1]
+    train_prob_pred0   = train_clean[disease_prob_col].values[idx_pred0]
+
+    nn_pred1 = NearestNeighbors(n_neighbors=cf_count, metric=metric, n_jobs=-1).fit(train_scaled_pred1)
+    nn_pred0 = NearestNeighbors(n_neighbors=cf_count, metric=metric, n_jobs=-1).fit(train_scaled_pred0)
+
+    def _compute_diffs(df, query_scaled):
+        """Compute diff vectors for a query set against the 2 unmatched pools."""
+        query_preds = df[disease_pred_col].values.astype(int)
+        n, d = query_scaled.shape
+        diff_vecs = np.empty((n, d), dtype=np.float64)
+        cf_probs  = np.empty(n, dtype=np.float64)
+        cf_paths  = np.empty(n, dtype=object)
+
+        mask = (query_preds == 1)
+        if mask.any():
+            _, idxs = nn_pred0.kneighbors(query_scaled[mask])
+            diff_vecs[mask] = (query_scaled[mask][:, np.newaxis, :] - train_scaled_pred0[idxs]).mean(axis=1)
+            cf_probs[mask]  = train_prob_pred0[idxs].mean(axis=1)
+            global_idxs     = pool_global_idx['pred0'][idxs]
+            cf_paths[mask]  = np.array(["|".join(train_clean["path"].values[row]) for row in global_idxs])
+
+        mask = (query_preds == 0)
+        if mask.any():
+            _, idxs = nn_pred1.kneighbors(query_scaled[mask])
+            diff_vecs[mask] = (query_scaled[mask][:, np.newaxis, :] - train_scaled_pred1[idxs]).mean(axis=1)
+            cf_probs[mask]  = train_prob_pred1[idxs].mean(axis=1)
+            global_idxs     = pool_global_idx['pred1'][idxs]
+            cf_paths[mask]  = np.array(["|".join(train_clean["path"].values[row]) for row in global_idxs])
+
+        return diff_vecs, cf_probs, cf_paths
+
+    train_diff, train_cf_probs, train_cf_paths = _compute_diffs(train_clean, train_scaled)
+    test_diff,  test_cf_probs,  test_cf_paths  = _compute_diffs(test_clean,  test_scaled)
+
+    diff_col_names = [f"delta_{c}" for c in relevant_cols]
+
+    train_out = pd.concat([train_clean,
+                           pd.DataFrame(train_diff, columns=diff_col_names, index=train_clean.index)], axis=1)
+    test_out  = pd.concat([test_clean,
+                           pd.DataFrame(test_diff,  columns=diff_col_names, index=test_clean.index)],  axis=1)
+
+    train_out["cf_prob"]  = train_cf_probs
+    test_out["cf_prob"]   = test_cf_probs
+    train_out["cf_paths"] = train_cf_paths
+    test_out["cf_paths"]  = test_cf_paths
+
+    return train_out, test_out, attr_scaler
+
 
 def main():
     c0_train = pd.read_csv(

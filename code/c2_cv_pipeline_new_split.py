@@ -1,6 +1,9 @@
 """
-c2_cv_pipeline.py
-=================
+c2_cv_pipeline_new_split.py
+
+## CHANGED VERSION - 
+
+
 5-fold cross-validation pipeline for C2 quality control models
 with support for simulated counterfactuals (CFs).
 
@@ -21,7 +24,7 @@ Configs:
         M6 : disease probability + delta + attribute + CF probability
 
 Usage:
-    python c2_cv_pipeline.py --cf_count 5 --disease effusion
+    python c2_cv_pipeline_new_split.py --cf_count 5 --disease effusion
 
 Parameters:
     --disease   : Disease name (e.g., 'effusion')
@@ -29,7 +32,7 @@ Parameters:
     --no_save_folds : Skip saving individual fold CSVs (saves disk space)
 
 Outputs:
-    results/C2_sim_cf/{disease}/cv_results/cf_{cf_count}/
+    results/C2_custom/{disease}/cv_results/cf_{cf_count}/
         ├── fold_data/          # Cached fold splits with CFs per fold
         ├── models/             # Saved models for each config/fold
         ├── cv_summary.csv      # Mean ± std AUC per config/model
@@ -63,6 +66,10 @@ BASE_DIR    = '/zhome/d0/a/221493/thesis/'
 N_FOLDS     = 5
 RANDOM_SEED = 42
 CONFIGS = ['B1','B2','B3','B4','B5','M1','M2','M3','M4','M5','M6']
+
+# Let's run only a few configs for testing: B1
+#CONFIGS = ['B1', 'B2','B4', 'M3', 'M6']  # <-- TEMPORARY FOR TESTING
+#N_FOLDS = 2  # <-- TEMPORARY FOR TESTING
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TRAINING FUNCTIONS
@@ -107,6 +114,8 @@ def train_model(X_train, X_test, y_train, y_test, model_type='LR'):
                               random_state=RANDOM_SEED)
         X_train_f32 = X_train.astype(np.float32)
         X_test_f32 = X_test.astype(np.float32)
+
+        # Fit the MLP with sample weights
         model.fit(scaler.fit_transform(X_train_f32), y_train)
         y_prob = model.predict_proba(scaler.transform(X_test_f32))[:, 1]
         return {
@@ -170,7 +179,7 @@ def build_feature_matrices(train_df, test_df, disease):
 # MAIN CV PIPELINE
 # ══════════════════════════════════════════════════════════════════════════════
 
-def run_cv(disease, cf_count, save_fold_data=True, unmatched=False):    
+def run_cv(disease, cf_count, save_fold_data=False, unmatched=False):    
     """
     Run complete 5-fold CV pipeline.
     
@@ -192,7 +201,7 @@ def run_cv(disease, cf_count, save_fold_data=True, unmatched=False):
     # ── Setup paths ───────────────────────────────────────────────────────
     results_base = os.path.join(BASE_DIR, 'results')
     cv_subdir = 'cv_results_unmatched' if unmatched else 'cv_results'
-    cv_dir = os.path.join(results_base, f'C2_sim_cf/{disease}/{cv_subdir}/cf_{cf_count}')
+    cv_dir = os.path.join(results_base, f'C2_custom/{disease}/{cv_subdir}/cf_{cf_count}')
     fold_data_dir = os.path.join(cv_dir, 'fold_data')
     plots_dir = os.path.join(cv_dir, 'cv_plots')
 
@@ -200,14 +209,8 @@ def run_cv(disease, cf_count, save_fold_data=True, unmatched=False):
     os.makedirs(fold_data_dir, exist_ok=True)
     os.makedirs(plots_dir, exist_ok=True)
     
-    # ── Load full dataset ─────────────────────────────────────────────────
-    c0_path = os.path.join(results_base, f'C0_baseline/{disease}/train_c0_{disease}.csv')
-    c1_path = os.path.join(results_base, 'C1_attributes/train_c1_attribute_vector_rad.csv')
-    
-    c0_df = pd.read_csv(c0_path)
-    c1_df = pd.read_csv(c1_path)
-    
-    full_df = c0_df.merge(c1_df, on='path', how='inner')
+    # NOW WITH HE NEW SPLIT, WE CAN LOAD THE FULL DATASET AND THEN SPLIT WITHIN EACH FOLD
+    full_df = pd.read_csv(os.path.join(results_base, 'C2_custom/c2_data.csv'))
     
     # SUBSAMPLE TO 10K FOR FASTER TESTING (REMOVE THIS IN FINAL RUN)
     #if len(full_df) > 10000:
@@ -225,6 +228,7 @@ def run_cv(disease, cf_count, save_fold_data=True, unmatched=False):
     print(f"  Incorrect: {(full_df['correct']==0).sum():,}\n")
     
     y = full_df['correct'].values
+    
     
     # ── Initialize CV splitter ────────────────────────────────────────────
     skf = StratifiedKFold(n_splits=N_FOLDS, shuffle=True, random_state=RANDOM_SEED)
@@ -318,9 +322,9 @@ def run_cv(disease, cf_count, save_fold_data=True, unmatched=False):
                 fold_pred_df[prob_col_name] = res['y_prob']
                 
             # ── Save fold-wide predictions CSV
-            pred_csv_path = os.path.join(cv_dir, f'fold_{fold_idx}_predictions.csv')
-            fold_pred_df.to_csv(pred_csv_path, index=False)
-            print(f"Fold {fold_idx} predictions saved to: {pred_csv_path}")
+        pred_csv_path = os.path.join(cv_dir, f'fold_{fold_idx}_predictions.csv')
+        fold_pred_df.to_csv(pred_csv_path, index=False)
+        print(f"Fold {fold_idx} predictions saved to: {pred_csv_path}")
     
     # ── AGGREGATE RESULTS ─────────────────────────────────────────────────
     print(f"\n{'='*70}")
@@ -361,21 +365,21 @@ def run_cv(disease, cf_count, save_fold_data=True, unmatched=False):
 # ══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Run C2 cross-validation')
-    parser.add_argument('--disease', type=str, default='effusion',
-                       help='Disease to evaluate')
-    parser.add_argument('--cf_count', type=int, default=1,
-                       help='Number of counterfactuals (k)')
-    parser.add_argument('--no_save_folds', action='store_true',
-                       help='Skip saving individual fold CSVs (saves disk space)')
-    parser.add_argument('--unmatched', action='store_true',
-                        help='Use unmatched CF pools (ablation)')
-    args = parser.parse_args()
+    import sys
     
-    
-    run_cv(
-        disease=args.disease,
-        cf_count=args.cf_count,
-        save_fold_data=not args.no_save_folds,
-        unmatched=args.unmatched        # add this line
-    )
+    # Jupyter passes kernel arguments that confuse argparse — detect and bypass
+    if any('jupyter' in arg or 'ipykernel' in arg for arg in sys.argv):
+        run_cv(disease='effusion', cf_count=1, save_fold_data=False, unmatched=False)
+    else:
+        parser = argparse.ArgumentParser(description='Run C2 cross-validation')
+        parser.add_argument('--disease', type=str, default='effusion')
+        parser.add_argument('--cf_count', type=int, default=1)
+        parser.add_argument('--save_folds', action='store_true')
+        parser.add_argument('--unmatched', action='store_true')
+        args = parser.parse_args()
+        run_cv(
+            disease=args.disease,
+            cf_count=args.cf_count,
+            save_fold_data=args.save_folds,
+            unmatched=args.unmatched
+        )

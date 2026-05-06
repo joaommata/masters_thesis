@@ -43,7 +43,7 @@ sys.path.insert(0, "/zhome/d0/a/221493/thesis/code")
 from cf_generation import load_models, load_image, get_c0_prob, one_guided_step
 
 BASE_DIR      = "/zhome/d0/a/221493/thesis"
-C0_CSV        = f"{BASE_DIR}/results/C0_custom/effusion/val_c0_effusion.csv"
+C0_CSV        = f"{BASE_DIR}/results/C0_custom/effusion/c2_data.csv"
 C0_THRESHOLD  = 0.5634
 T_TOTAL       = 1000
 DEVICE        = "cuda" if torch.cuda.is_available() else "cpu"
@@ -54,23 +54,29 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # ── Reduced parameter grid ────────────────────────────────────────────────────
 # 10 T_START values (log-spaced to sample low end more densely, where CFs are subtler)
 T_START_VALUES       = [10, 25, 50, 75, 100, 150, 200, 300, 500, 750]
+T_START_VALUES = [50, 100]
 print(f"T_START values: {T_START_VALUES}")
 # 8 guidance weights
 GUIDANCE_WEIGHT_VALUES = [0.1, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
+GUIDANCE_WEIGHT_VALUES = [0.025, 0.01]
 print(f"Guidance weight values: {GUIDANCE_WEIGHT_VALUES}")
-# Total: 80 combinations per sample
 
 # ── Sample selection ──────────────────────────────────────────────────────────
-N_SAMPLES_PER_BIN = 2  # how many samples per probability bin
 
-def select_random_samples(df, n_samples=6, random_state=42):
+def select_random_samples(df, n_samples=10, random_state=42):
     """
-    Pick n_samples randomly from the full dataset.
+    Pick n_samples randomly from the full dataset. Half should be correct predictions, half incorrect.
+
     """
     chosen = df.sample(n_samples, random_state=random_state)
+    correct = chosen[chosen['correct'] == 1]
+    incorrect = chosen[chosen['correct'] == 0]
     selected = []
     for _, row in chosen.iterrows():
         selected.append(row.to_dict())
+    print(f"Selected {len(correct)} correct and {len(incorrect)} incorrect samples.")
+    print("Correct sample probabilities: ", correct['prob'].values)
+    print("Incorrect sample probabilities: ", incorrect['prob'].values)
     return selected
 
 # ── Image similarity metrics ──────────────────────────────────────────────────
@@ -175,8 +181,8 @@ def main():
     print("Models loaded.\n")
     
     # Load LPIPS model if available
-    lpips_model = lpips.LPIPS(net='vgg').to(DEVICE) if LPIPS_AVAILABLE else None
-    print("LPIPS model loaded.\n" if LPIPS_AVAILABLE else "LPIPS not available, skipping.\n")
+    #lpips_model = lpips.LPIPS(net='vgg').to(DEVICE) if LPIPS_AVAILABLE else None
+    #print("LPIPS model loaded.\n" if LPIPS_AVAILABLE else "LPIPS not available, skipping.\n")
     
     # Select stratified samples
     df = pd.read_csv(C0_CSV)
@@ -199,13 +205,12 @@ def main():
                 
                 # Generate CF
                 x_cf, cf_prob = generate_cf_with_params(
-                    unet, sd, x0, classifier, target_cls, t_start, g_weight
-                )
+                    unet, sd, x0, classifier, target_cls, t_start, g_weight)
                 
                 # Metrics
                 delta_prob = abs(orig_prob - cf_prob)
                 flipped    = int((orig_prob >= C0_THRESHOLD) != (cf_prob >= C0_THRESHOLD))
-                sim_ssim   = compute_ssim(x0, x_cf)
+                # sim_ssim   = compute_ssim(x0, x_cf)
                 print(f"  T={t_start:4d}  G={g_weight:.2f}  "
                       f"cf_prob={cf_prob:.3f}  flipped={flipped}  ssim={sim_ssim:.3f}")
                 # Efficiency: how much probability shift per unit of distortion

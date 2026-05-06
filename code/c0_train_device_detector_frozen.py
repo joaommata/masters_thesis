@@ -51,14 +51,18 @@ transform = transforms.Compose([
 # ── Model ─────────────────────────────────────────────────────────────────────
 def build_model():
     model = models.densenet121(weights='IMAGENET1K_V1')
-    model.classifier = nn.Linear(model.classifier.in_features, 1)
+    model.classifier = nn.Sequential(
+        nn.Dropout(0.5),
+        nn.Linear(model.classifier.in_features, 1)
+    )
     return model
 
 def freeze_backbone(model):
     for param in model.parameters():
         param.requires_grad = False
-    model.classifier.weight.requires_grad = True
-    model.classifier.bias.requires_grad   = True
+    # classifier is now Sequential(Dropout, Linear)
+    for param in model.classifier.parameters():
+        param.requires_grad = True
 
 def unfreeze_all(model):
     for param in model.parameters():
@@ -143,7 +147,7 @@ if __name__ == "__main__":
     # ── Phase 2: full fine-tuning ─────────────────────────────────────────────
     print(f"\n── Phase 2: Full fine-tuning ({N_EPOCHS_FULL} epochs, LR={LR_FULL}) ──")
     unfreeze_all(model)
-    optimizer = torch.optim.Adam(model.parameters(), lr=LR_FULL)
+    optimizer = torch.optim.Adam(model.parameters(), lr=LR_FULL, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='max', factor=0.5, patience=2,
     )

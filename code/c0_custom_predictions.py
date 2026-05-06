@@ -19,7 +19,7 @@ from sklearn.metrics import roc_curve, roc_auc_score
 BASE_DIR   = "/zhome/d0/a/221493/thesis"
 DATA_DIR   = os.path.join(BASE_DIR, "data")
 OUTPUT_DIR = os.path.join(BASE_DIR, "results/C0_custom/effusion")
-MODEL_PATH = os.path.join(BASE_DIR, "results/C0_custom/c0_best.pt")
+MODEL_PATH = os.path.join(BASE_DIR, "results/C0_custom/effusion/c0_best.pt")
 BATCH_SIZE = 32
 DEVICE     = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 os.makedirs(OUTPUT_DIR, exist_ok=True)

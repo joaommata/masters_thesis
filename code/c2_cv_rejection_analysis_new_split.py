@@ -81,10 +81,6 @@ def compute_risk_coverage(c2_scores, correct):
     k_values = np.arange(1, n + 1)
     coverage = k_values / n
     risk     = cumulative_errors / k_values  # error rate on accepted set
-    
-    # Make risk and coverage percentage
-    coverage *= 100
-    risk *= 100
 
     aurc = auc(coverage, risk)
     return coverage, risk, aurc
@@ -101,9 +97,6 @@ def compute_selective_accuracy(c2_scores, correct):
     coverage = k_values / n
     sel_accuracy = cumulative_correct / k_values  # accuracy on accepted set
     
-    # Make risk and accuracy percentage
-    coverage *= 100
-    sel_accuracy *= 100
 
     # AUSAC: Area Under Selective Accuracy-Coverage curve (higher = better)
     ausac = auc(coverage, sel_accuracy)
@@ -139,7 +132,7 @@ def main():
                     lw=2, label=f'{config} ({aurc:.4f})')
         ax.set_title(f'{model_type} (k={CF_COUNT})')
         ax.set_xlabel('Coverage %')
-        ax.set_ylabel('Risk (Error Rate) %')
+        ax.set_ylabel('Risk (Error Rate)')
         ax.set_xlim(0, 1)
         ax.legend(title='Config (AURC)', fontsize=10)
         ax.grid(alpha=0.3)
@@ -165,8 +158,8 @@ def main():
                    label=f'Baseline ({baseline_acc:.3f})')
         ax.set_title(f'{model_type} (k={CF_COUNT})')
         ax.set_xlabel('Coverage %')
-        ax.set_ylabel('Selective Accuracy %')
-        ax.set_xlim(0, 1); ax.set_ylim(80, 100.0)
+        ax.set_ylabel('Selective Accuracy')
+        ax.set_xlim(0, 1); ax.set_ylim(0.9, 1.0)
         ax.legend(title='Config (AUSAC)', fontsize=10)
         ax.grid(alpha=0.3)
     plt.tight_layout()

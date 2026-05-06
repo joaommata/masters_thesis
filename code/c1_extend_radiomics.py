@@ -174,14 +174,21 @@ def extend_split(csv_filename, attribute_csv, base_dir, segmentation_model,
 
 
 def _save(df, new_cols_data, output_path):
-    """Merge new feature columns into df and save."""
+    """
+    Patches new features into the existing dataframe without duplicating columns.
+    """
+    # Convert the new results into a DataFrame
     new_df = pd.DataFrame.from_dict(new_cols_data, orient='index')
-    merged = df.join(new_df, how='left')
+    
+    # combine_first uses df as the base and fills in values from new_df 
+    # only where df has NaNs or missing columns. This avoids the suffix error.
+    merged = df.combine_first(new_df)
+    
+    # Ensure the index is named correctly before saving
     merged.index.name = 'path'
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     merged.reset_index().to_csv(output_path, index=False)
-
-
+    
 def main():
     base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 

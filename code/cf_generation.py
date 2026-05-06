@@ -59,8 +59,8 @@ FOLD_CSV = f"{BASE_DIR}/results/C2_custom/effusion/cv_results/cf_1/fold_0_predic
 DIFFUSION_CKPT = f"{BASE_DIR}/FastDiME_Med/pretrained_models/diffusion/OUT_CHEXPERT_CardioSplit/ckpt.tar"
 
 DEVICE          = "cuda" if torch.cuda.is_available() else "cpu"
-T_START         = 100    # noise level before reversing: higher = more freedom, less = identity preservation
-GUIDANCE_WEIGHT = 0.01    # classifier guidance strength, how much it influences the generation, multiplies by the classifier gradient at each step
+T_START         = 50    # noise level before reversing: higher = more freedom, less = identity preservation
+GUIDANCE_WEIGHT = 0.025    # classifier guidance strength, how much it influences the generation, multiplies by the classifier gradient at each step
 T_TOTAL         = 1000   # must match the checkpoint
 C0_THRESHOLD    = 0.5634 # taken from C0's training
 N_SNAPSHOTS     = 5 # intermediate steps to segment and plot (evenly spaced between T_START and 1)
@@ -247,7 +247,7 @@ def one_guided_step(unet, sd, x_t, t_val, classifier, target_class):
     return x_prev.detach()
 
 
-def generate_cf(unet, sd, x0, classifier, target_class, n_snapshots=N_SNAPSHOTS):
+def generate_cf(unet, sd, x0, classifier, target_class, n_snapshots=N_SNAPSHOTS, track_probs=True):
     """
     Generate a counterfactual for x0.
 
@@ -277,12 +277,12 @@ def generate_cf(unet, sd, x0, classifier, target_class, n_snapshots=N_SNAPSHOTS)
         # At each step, we perform one guided reverse diffusion step, which updates x_t to x_{t-1} while nudging it towards the target class according to the classifier gradient.
         x = one_guided_step(unet, sd, x, t_val, classifier, target_class)
         # Save C0 probability at this intermediate step for later plotting
-        intermediate_prob = get_c0_prob(x, classifier)
-        intermediate_probs.append((t_val, intermediate_prob))
+        if track_probs:
+            intermediate_prob = get_c0_prob(x, classifier)
+            intermediate_probs.append((t_val, intermediate_prob))
         if t_val in snapshot_ts:
             intermediates.append((t_val, x.detach().clone()))
 
-            
 
     # Get C0's probability on the final CF image, to see if we've successfully flipped the prediction.
     # CF is also an important input i the training of some configs of C2.
@@ -525,30 +525,43 @@ def main():
 
     df = pd.read_csv(FOLD_CSV)
 
-    REQUIRED_SAMPLES = 5
+    REQUIRED_SAMPLES = 20
 
-    # ── Sample positives / negatives ──────────────────────────────────────
-    pos_df = df[df['effusion_true'] == 1]
-    neg_df = df[df['effusion_true'] == 0]
+    # ── Sample positives / negatives from the fold predictions CSV , half should be correct and half incorrect according to C0, to see how the diffusion CF behaves in different scenarios.
+    pos_df = df[df['effusion_pred'] == 1]
+    neg_df = df[df['effusion_pred'] == 0]
+    
+    # We want a mix of true positives, false positives, true negatives, and false negatives.
+    correct_pos = pos_df[pos_df['correct'] == 1]
+    incorrect_pos = pos_df[pos_df['correct'] == 0]
+    correct_neg = neg_df[neg_df['correct'] == 1]
+    incorrect_neg = neg_df[neg_df['correct'] == 0]
 
-    pos_samples = pos_df.sample(
+    correct_pos_samples = correct_pos.sample(
         n=min(REQUIRED_SAMPLES, len(pos_df)),
         random_state=42
     )
-
-    neg_samples = neg_df.sample(
+    incorrect_pos_samples = incorrect_pos.sample(
+        n=min(REQUIRED_SAMPLES, len(pos_df)),
+        random_state=42
+    )
+    correct_neg_samples = correct_neg.sample(
+        n=min(REQUIRED_SAMPLES, len(neg_df)),
+        random_state=42
+    )
+    incorrect_neg_samples = incorrect_neg.sample(
         n=min(REQUIRED_SAMPLES, len(neg_df)),
         random_state=42
     )
 
     # Combine + convert to list of dicts (IMPORTANT FIX)
-    samples = pd.concat([pos_samples, neg_samples]) \
+    samples = pd.concat([correct_pos_samples, incorrect_pos_samples, correct_neg_samples, incorrect_neg_samples]) \
                 .reset_index(drop=True) \
                 .to_dict(orient="records")
 
     print(f"\nLoaded {len(samples)} samples")
     for s in samples:
-        print(f"  pred={int(s['effusion_pred'])} true={int(s['effusion_true'])} "
+        print(f"  pred={int(s['effusion_pred'])} correct = {int(s['correct'])} | true={int(s['effusion_true'])} "
               f"prob={s['effusion_prob']:.4f}  {s['path']}")
 
     # ── Generate CFs ──────────────────────────────────────────────────────
@@ -558,14 +571,16 @@ def main():
         print(f"\n── Sample {i+1}: pred={int(sample['effusion_pred'])} true={int(sample['effusion_true'])} ──")
 
         x0 = load_image(sample['path'])
+        print(f"Original C0 probability: {sample['effusion_prob']:.4f}")
         target_class = 1 - int(sample['effusion_pred'])
 
+        print("Generating counterfactual...")
         x_cf, cf_prob, intermediates, intermediate_probs = generate_cf(
             unet, sd, x0, classifier, target_class
         )
 
         flipped = (sample['effusion_prob'] < C0_THRESHOLD) != (cf_prob < C0_THRESHOLD)
-
+        print(f"Counterfactual C0 probability: {cf_prob:.4f}")
         print(f"  orig={sample['effusion_prob']:.4f} → CF={cf_prob:.4f}  flip={flipped}")
 
         results.append({
@@ -574,12 +589,13 @@ def main():
             'cf_prob':        cf_prob,
             'true_label':     int(sample['effusion_true']),
             'original_pred':  int(sample['effusion_pred']),
+            'correct':        int(sample['correct']),
             'cf_pred':        int(cf_prob >= C0_THRESHOLD),
             'flip_achieved':  flipped,
             'intermediate_probs': intermediate_probs,
         })
 
-        # ── Plot CF evolution ─────────────────────────────────────────────
+        # ── Plot CF evolution ────────────────────────────────────────py─────
         plot_cf_with_intermediates(
             x0, intermediates, x_cf, cf_prob, sample, seg_model,
             save_path=os.path.join(

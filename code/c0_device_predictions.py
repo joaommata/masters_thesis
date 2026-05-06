@@ -8,6 +8,7 @@ path, prob, pred, true, correct, margin
 """
 
 import os
+from sklearn.model_selection import train_test_split
 import torch
 import torch.nn as nn
 import pandas as pd
@@ -94,10 +95,17 @@ def load_model(model_path, device):
 
     return model
 
-# FOR THE DENSENET VERSION:
+# FOR THE DENSENET WITH DROPOUT, CHANGE THE MODEL LOADING TO THIS:
+
 def load_model(model_path, device):
     model = models.densenet121(weights=None)
-    model.classifier = nn.Linear(model.classifier.in_features, 1)
+    
+    # This must match the build_model() structure from your training script
+    model.classifier = nn.Sequential(
+        nn.Dropout(0.5),
+        nn.Linear(model.classifier.in_features, 1)
+    )
+    
     model.load_state_dict(torch.load(model_path, map_location=device))
     model = model.to(device)
     model.eval()
@@ -147,6 +155,13 @@ def find_optimal_threshold(df):
     thresh = thresholds[np.argmax(tpr - fpr)]
 
     return thresh, auc
+
+def find_optimal_threshold_f1(df):
+    from sklearn.metrics import f1_score
+    _, _, thresholds = roc_curve(df["true"], df["prob"])
+    f1s = [f1_score(df["true"], (df["prob"] > t).astype(int), 
+                    zero_division=0) for t in thresholds]
+    return thresholds[np.argmax(f1s)]
 
 
 def apply_threshold(df, thresh):
@@ -205,55 +220,41 @@ def main():
     print(f"Model loaded from:")
     print(MODEL_PATH)
 
-    # Run inference
+    # 1. Run inference on both sets first
     print("\nRunning inference on TRAIN...")
-    train_raw = run_inference(
-        model,
-        train_loader,
-        DEVICE
-    )
+    train_raw = run_inference(model, train_loader, DEVICE)
 
     print("\nRunning inference on VAL...")
-    val_raw = run_inference(
-        model,
-        val_loader,
-        DEVICE
+    val_raw = run_inference(model, val_loader, DEVICE)
+
+    # 2. Find threshold on calibration slice of train
+    _, cal_raw = train_test_split(
+        train_raw, test_size=0.1, random_state=42,
+        stratify=train_raw["true"]
     )
+    thresh = find_optimal_threshold_f1(cal_raw)
+    print(f"\nCalibration threshold: {thresh:.4f}")
 
-    # Find threshold on train only
-    thresh, auc = find_optimal_threshold(train_raw)
-
-    print(f"\nTrain AUC: {auc:.4f}")
-    print(f"Optimal threshold: {thresh:.4f}")
-
-    # Apply threshold
-    train_out = apply_threshold(
-        train_raw,
-        thresh
-    )
-
-    val_out = apply_threshold(
-        val_raw,
-        thresh
-    )
-
+    # 3. Apply to both
+    train_out = apply_threshold(train_raw, thresh)
+    val_out   = apply_threshold(val_raw, thresh)
     print("\nValidation Classification Report:")
     print(
-        classification_report(
-            val_out["true"],
-            val_out["pred"],
-            digits=4
+            classification_report(
+                val_out["true"],
+                val_out["pred"],
+                digits=4
+            )
         )
-    )
 
     print("\nConfusion Matrix:")
     print(
-    confusion_matrix(
-        val_out["true"],
-        val_out["pred"]
+        confusion_matrix(
+            val_out["true"],
+            val_out["pred"]
+        )
     )
-)
-    
+        
     # Metrics
     for name, df in [
         ("Train", train_out),

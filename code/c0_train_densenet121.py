@@ -10,10 +10,18 @@ from sklearn.metrics import roc_auc_score
 import matplotlib.pyplot as plt
 import mlflow
 
+## ATENTION -> MAKE SURE I ADAPT THE DISEASE NAME AND CHECK PATHS
+
+DISEASE = 'pneumothorax'
+# disease to column mapping
+disease_col = {
+    "pneumothorax": "Pneumothorax",
+    "effusion": "Pleural Effusion"
+}
 
 # ── Config ────────────────────────────────────────────────────────────────────
-DATA_DIR   = "/zhome/d0/a/221493/thesis/data/"
-OUTPUT_DIR = "/zhome/d0/a/221493/thesis/results/C0_custom/"
+DATA_DIR   = "/zhome/d0/a/221493/thesis/data/{DISEASE}/"
+OUTPUT_DIR = f"/zhome/d0/a/221493/thesis/results/C0_custom/{DISEASE}/"
 N_EPOCHS   = 10
 BATCH_SIZE = 32
 LR         = 1e-4
@@ -24,7 +32,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 class CheXpertDataset(Dataset):
     def __init__(self, df, data_dir, transform=None):
         # Keep only clean labels (0 and 1), drop uncertain (-1) and NaN
-        self.df = df[df["Pleural Effusion"].isin([0.0, 1.0])].reset_index(drop=True)
+        self.df = df[df[disease_col[DISEASE]].isin([0.0, 1.0])].reset_index(drop=True)
         self.data_dir = data_dir
         self.transform = transform
 
@@ -36,7 +44,7 @@ class CheXpertDataset(Dataset):
         img = Image.open(os.path.join(self.data_dir, row["Path"])).convert("RGB")
         if self.transform:
             img = self.transform(img)
-        label = torch.tensor(row["Pleural Effusion"], dtype=torch.float32)
+        label = torch.tensor(row[disease_col[DISEASE]], dtype=torch.float32)
         return img, label
 
 # ── Transforms ────────────────────────────────────────────────────────────────
@@ -83,7 +91,7 @@ def evaluate(model, loader, criterion, device):
 
 if __name__ == "__main__":
 
-    mlflow.set_experiment("C0_chexpert_effusion")
+    mlflow.set_experiment(f"C0_chexpert_{DISEASE}")
 
     with mlflow.start_run():
 
@@ -96,8 +104,8 @@ if __name__ == "__main__":
         val_losses = []
         val_aucs = []
 
-        train_df = pd.read_csv(os.path.join(DATA_DIR, "custom_train_split.csv"))
-        val_df   = pd.read_csv(os.path.join(DATA_DIR, "custom_val_split.csv"))
+        train_df = pd.read_csv(os.path.join(DATA_DIR, "C0_train_split.csv"))
+        val_df   = pd.read_csv(os.path.join(DATA_DIR, "C0_val_split.csv"))
 
         train_loader = DataLoader(CheXpertDataset(train_df, DATA_DIR, transform),
                                   batch_size=BATCH_SIZE, shuffle=True, num_workers=4)

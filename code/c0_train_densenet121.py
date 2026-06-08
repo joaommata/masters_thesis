@@ -8,15 +8,14 @@ from torchvision import models, transforms
 from torch.utils.data import Dataset, DataLoader
 from sklearn.metrics import roc_auc_score
 import matplotlib.pyplot as plt
-import mlflow
 
-## ATENTION -> MAKE SURE I ADAPT THE DISEASE NAME AND CHECK PATHS
 
-DISEASE = 'pneumothorax'
+DISEASE = 'effusion'
 # disease to column mapping
 disease_col = {
     "pneumothorax": "Pneumothorax",
-    "effusion": "Pleural Effusion"
+    "effusion": "Pleural Effusion",
+    "cardiomegaly": "Cardiomegaly",
 }
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -91,14 +90,6 @@ def evaluate(model, loader, criterion, device):
 
 if __name__ == "__main__":
 
-    mlflow.set_experiment(f"C0_chexpert_{DISEASE}")
-
-    with mlflow.start_run():
-
-        # log hyperparameters
-        mlflow.log_param("epochs", N_EPOCHS)
-        mlflow.log_param("batch_size", BATCH_SIZE)
-        mlflow.log_param("lr", LR)
 
         train_losses = []
         val_losses = []
@@ -127,25 +118,14 @@ if __name__ == "__main__":
             val_losses.append(val_loss)
             val_aucs.append(val_auc)
 
-            # log metrics per epoch
-            mlflow.log_metric("train_loss", train_loss, step=epoch)
-            mlflow.log_metric("val_loss", val_loss, step=epoch)
-            mlflow.log_metric("val_auc", val_auc, step=epoch)
-
             print(f"Epoch {epoch+1:02d} | Train Loss: {train_loss:.4f} | Val AUC: {val_auc:.4f}")
 
             if val_auc > best_auc:
                 best_auc = val_auc
                 path = os.path.join(OUTPUT_DIR, "c0_best.pt")
                 torch.save(model.state_dict(), path)
-
-                # log best model
-                mlflow.log_artifact(os.path.join(OUTPUT_DIR, "c0_best.pt"))
-
                 print(f"  -> Saved new best model (AUC={best_auc:.4f})")
 
-        # log final metrics
-        mlflow.log_metric("best_val_auc", best_auc)
         
         plt.figure()
         plt.plot(train_losses, label="Train Loss")
@@ -156,8 +136,6 @@ if __name__ == "__main__":
         plt.savefig(loss_path)
         plt.close()
 
-        mlflow.log_artifact(loss_path)
-
         plt.figure()
         plt.plot(val_aucs, label="Val AUC")
         plt.legend()
@@ -165,5 +143,3 @@ if __name__ == "__main__":
         auc_path = os.path.join(OUTPUT_DIR, "auc.png")
         plt.savefig(auc_path)
         plt.close()
-
-        mlflow.log_artifact(auc_path)

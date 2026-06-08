@@ -187,7 +187,7 @@ def plot_cf_count_comparison(all_cv_results, disease, output_dir,
         {cf_count: cv_results_dict}
     """
     
-    fig, ax = plt.subplots(figsize=(8, 7))
+    fig, ax = plt.subplots(figsize=(6, 6))
     
     colors_cf = {
         1:  '#009E73',   # teal
@@ -233,45 +233,44 @@ def plot_cf_count_comparison(all_cv_results, disease, output_dir,
     plt.savefig(save_path, dpi=600, bbox_inches='tight')
     plt.close()
     print(f'✓ Saved CF count comparison → {save_path}')
-
+    
 def plot_auc_vs_k(all_cv_results, disease, output_dir, config='M6', model_type='LR'):
-    """
-    Plot mean AUC vs CF count (k) as a simple line plot with error bars.
-    Cleaner alternative to overlapping ROC curves for showing the k sweep trend.
-    """
-    
     ks, auc_means, auc_stds = [], [], []
-    
     for cf_count in sorted(all_cv_results.keys()):
         fold_results = all_cv_results[cf_count][model_type][config]
         aucs = [f['auc'] for f in fold_results]
         ks.append(cf_count)
         auc_means.append(np.mean(aucs))
         auc_stds.append(np.std(aucs))
-    
-    fig, ax = plt.subplots(figsize=(8, 7))
-    
-    ax.plot(ks, auc_means, color=PLOT_COLORS['M6'], lw=2.5, 
-            marker='o', markersize=7)
-    
+
+    plt.style.use('seaborn-v0_8-white')
+    plt.rcParams.update({
+        'font.family': 'sans-serif', 'font.size': 13,
+        'axes.titlesize': 13, 'axes.labelsize': 13,
+        'xtick.labelsize': 13, 'ytick.labelsize': 13,
+        'legend.fontsize': 11,
+        'axes.linewidth': 1.2, 'grid.alpha': 0.3,
+        'grid.linewidth': 0.6, 'lines.linewidth': 1.8,
+    })
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.plot(ks, auc_means, color=PLOT_COLORS['M6'], lw=2.5, marker='o', markersize=7)
     ax.fill_between(ks,
                     np.array(auc_means) - np.array(auc_stds),
                     np.array(auc_means) + np.array(auc_stds),
                     color=PLOT_COLORS['M6'], alpha=0.15)
-    
     ax.set_xlabel('Number of Counterfactuals (k)')
     ax.set_ylabel('Mean AUROC (5-fold CV)')
     ax.set_title(f'Effect of CF count on AUROC ({model_type} {config})')
     ax.set_xticks(ks)
     ax.grid(alpha=0.3, linewidth=0.5)
-    
     plt.tight_layout()
-    save_path = os.path.join(output_dir, 
-                             f'auc_vs_k_{model_type}_{config}.png')
+    save_path = os.path.join(output_dir, f'auc_vs_k_{model_type}_{config}.png')
     plt.savefig(save_path, dpi=600, bbox_inches='tight')
     plt.close()
     print(f'✓ Saved AUC vs k → {save_path}')
-    
 # ══════════════════════════════════════════════════════════════════════════════
 # PLOT 3: C2 OUTPUT DISTRIBUTIONS (TP/FN/TN/FP)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -422,7 +421,7 @@ def plot_rejection_analysis(disease, cf_count, output_dir,
     b_fnr = np.mean(baseline_fnrs); b_fnr_std = np.std(baseline_fnrs)
 
     # ── Figure (a): Accuracy ──
-    fig, ax1 = plt.subplots(figsize=(7, 6))
+    fig, ax1 = plt.subplots(figsize=(6, 6))
     ax2 = ax1.twinx()
 
     ax1.axhline(b_acc, color='#999999', lw=1.5, ls='--',
@@ -480,11 +479,11 @@ def plot_rejection_analysis(disease, cf_count, output_dir,
     ax1.set_xlabel('C2 Threshold')
     ax1.set_ylabel('Error Rate on Accepted Cases (%)')
     ax2.set_ylabel('Cases Rejected (%)')
-    ax1.set_ylim(0, 35); ax2.set_ylim(0, 50)
+    ax1.set_ylim(0, 15); ax2.set_ylim(0, 20)
     lines1, labels1 = ax1.get_legend_handles_labels()
     lines2, labels2 = ax2.get_legend_handles_labels()
     ax1.legend(lines1+lines2, labels1+labels2, loc='upper right', fontsize=10)
-    ax1.set_title(f'Clinical Rejection — {disease.capitalize()} {model_type} CF={cf_count}')
+    ax1.set_title(f'Clinical Rejection ({model_type} CF={cf_count})')
     ax1.grid(alpha=0.3, linewidth=0.5)
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, f'rejection_clinical_{model_type}_{config}_cf{cf_count}.png'),
@@ -595,7 +594,6 @@ def main():
                            if f.startswith('fold_') and f.endswith('_predictions.csv')])
         
          # ── Rewriting only the part that calls plot_rejection_analysis ──
-
         if fold_files:
             dfs = [pd.read_csv(os.path.join(cv_dir, f)) for f in fold_files]
             aggregated_df = pd.concat(dfs, ignore_index=True)
@@ -603,7 +601,7 @@ def main():
             # 2. Distributions (for each model)
             for model_type in args.models:
                 plot_distributions(aggregated_df, disease, cf_count, 
-                                cf_output_dir, model_type=model_type, config='B1')
+                                cf_output_dir, model_type=model_type, config='M6')
             
             # 3. Rejection analysis (for each model) — pass fold info
             for model_type in args.models:
@@ -612,7 +610,7 @@ def main():
                     cf_count=cf_count,
                     output_dir=cf_output_dir,
                     model_type=model_type,
-                    config='B1',
+                    config='M6',
                     fold_files=fold_files,
                     cv_dir=cv_dir
                 )
@@ -629,9 +627,9 @@ def main():
         
         for model_type in args.models:
             plot_cf_count_comparison(all_cv_results, disease, comparison_dir,
-                                   config='B1', model_type=model_type)
+                                   config='M6', model_type=model_type)
             plot_auc_vs_k(all_cv_results, disease, comparison_dir,
-                         config='B1', model_type=model_type)
+                         config='M6', model_type=model_type)
     
     print(f"\n{'='*70}")
     print(f"  ✓ All analyses complete!")

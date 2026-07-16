@@ -9,14 +9,15 @@ from plot_config import PLOT_COLORS
 # ══════════════════════════════════════════════════════════════════════════════
 # CONFIG
 # ══════════════════════════════════════════════════════════════════════════════
-BASE_DIR = '/zhome/d0/a/221493/thesis/'
+DATA_ROOT   = os.environ.get("THESIS_DATA", "/work3/s251710/thesis_data")
+RESULTS_DIR = "/work3/s251710/thesis_results"
 DISEASE  = 'effusion'
 MODEL    = 'LR'
 CONFIGS  = ['M6']  # compare two configs on one plot
 
 # Load matched and unmatched ROC data (both at k=1)
-roc_matched   = json.load(open(BASE_DIR + f"results/C2_sim_cf/{DISEASE}/roc_data_1.json"))
-roc_unmatched = json.load(open(BASE_DIR + f"results/C2_sim_cf/{DISEASE}/roc_data_1_unmatched.json"))
+roc_matched   = json.load(open(RESULTS_DIR + f"/C2_sim_cf/{DISEASE}/roc_data_1.json"))
+roc_unmatched = json.load(open(RESULTS_DIR + f"/C2_sim_cf/{DISEASE}/roc_data_1_unmatched.json"))
 
 # Explicit colors per config and matching strategy.
 CURVE_COLORS = {
@@ -74,5 +75,5 @@ ax.grid(alpha=0.30, linewidth=0.5)
 
 plt.tight_layout()
 config_tag = '_vs_'.join(c.lower() for c in CONFIGS)
-plt.savefig(os.path.join(BASE_DIR, f'results/C2_sim_cf/{DISEASE}/roc_matched_vs_unmatched_{MODEL.lower()}_{config_tag}.png'), dpi=150)
+plt.savefig(os.path.join(RESULTS_DIR, f'C2_sim_cf/{DISEASE}/roc_matched_vs_unmatched_{MODEL.lower()}_{config_tag}.png'), dpi=150)
 plt.show()

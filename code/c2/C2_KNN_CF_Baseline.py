@@ -1,0 +1,1 @@
+DONE INSIDE THE CV PIPELINE, SEE c2_cv_pipeline_new_split.py

@@ -1,5 +1,6 @@
 # c0_train_resnet50.py
 import os
+import argparse
 import torch
 import torch.nn as nn
 import pandas as pd
@@ -9,20 +10,27 @@ from torch.utils.data import Dataset, DataLoader
 from sklearn.metrics import roc_auc_score
 import matplotlib.pyplot as plt
 
-# ── Config ────────────────────────────────────────────────────────────────────
-DATA_DIR    = "/zhome/d0/a/221493/thesis/data/"                
-SPLIT_DIR   = "/zhome/d0/a/221493/thesis/data/effusion/"
-OUTPUT_DIR = "/zhome/d0/a/221493/thesis/results/C0_resnet50/"
+# ── Config Constants ─────────────────────────────────────────────────────────
+DATA_ROOT   = os.environ.get("THESIS_DATA", "/work3/s251710/thesis_data")
+disease_col = {
+    "pneumothorax": "Pneumothorax",
+    "effusion": "Pleural Effusion",
+    "cardiomegaly": "Cardiomegaly",
+}
+
+DATA_DIR   = DATA_ROOT + "/"                
 N_EPOCHS   = 10
 BATCH_SIZE = 32
 LR         = 1e-4
+
 DEVICE     = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ── Dataset ───────────────────────────────────────────────────────────────────
 class CheXpertDataset(Dataset):
-    def __init__(self, df, data_dir, transform=None):
-        self.df = df[df["Pleural Effusion"].isin([0.0, 1.0])].reset_index(drop=True)
+    def __init__(self, df, data_dir, disease, disease_map, transform=None):
+        # Filter dataframe for target disease valid labels (0.0 or 1.0)
+        self.target_col = disease_map[disease]
+        self.df = df[df[self.target_col].isin([0.0, 1.0])].reset_index(drop=True)
         self.data_dir = data_dir
         self.transform = transform
 
@@ -34,7 +42,7 @@ class CheXpertDataset(Dataset):
         img = Image.open(os.path.join(self.data_dir, row["Path"])).convert("RGB")
         if self.transform:
             img = self.transform(img)
-        label = torch.tensor(row["Pleural Effusion"], dtype=torch.float32)
+        label = torch.tensor(row[self.target_col], dtype=torch.float32)
         return img, label
 
 # ── Transforms ────────────────────────────────────────────────────────────────
@@ -80,16 +88,36 @@ def evaluate(model, loader, criterion, device):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    # Setup argument parser
+    parser = argparse.ArgumentParser(description="Train ResNet50 on CheXpert data for a specific disease.")
+    parser.add_argument(
+        "--disease", 
+        type=str, 
+        required=True, 
+        choices=list(disease_col.keys()),
+        help="The disease target to train the model on."
+    )
+    args = parser.parse_args()
+    
+    DISEASE = args.disease
+    
+    # Resolve dynamic paths based on selected disease
+    SPLIT_DIR   = f"{DATA_ROOT}/{DISEASE}/"
+    OUTPUT_DIR = f"/work3/s251710/thesis_results/C0_resnet50/{DISEASE}/"
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    
+    print(f"Starting training pipeline for: {DISEASE.upper()}")
+    print(f"Outputs will be saved to: {OUTPUT_DIR}")
 
     train_losses, val_losses, val_aucs = [], [], []
 
     train_df = pd.read_csv(os.path.join(SPLIT_DIR, "c0_train_split.csv"))
     val_df   = pd.read_csv(os.path.join(SPLIT_DIR, "c0_val_split.csv"))
 
-    train_loader = DataLoader(CheXpertDataset(train_df, DATA_DIR, transform),
-                              batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
-    val_loader   = DataLoader(CheXpertDataset(val_df, DATA_DIR, transform),
-                              batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
+    train_loader = DataLoader(CheXpertDataset(train_df, DATA_DIR, DISEASE, disease_col, transform),
+                              batch_size=BATCH_SIZE, shuffle=True, num_workers=4, persistent_workers=True, pin_memory=True)
+    val_loader   = DataLoader(CheXpertDataset(val_df, DATA_DIR, DISEASE, disease_col, transform),
+                              batch_size=BATCH_SIZE, shuffle=False, num_workers=4, persistent_workers=True, pin_memory=True)
 
     model = build_model().to(DEVICE)
     criterion = nn.BCEWithLogitsLoss()
@@ -116,10 +144,10 @@ if __name__ == "__main__":
     plt.figure()
     plt.plot(train_losses, label="Train Loss")
     plt.plot(val_losses, label="Val Loss")
-    plt.legend(); plt.title("Loss")
+    plt.legend(); plt.title(f"Loss ({DISEASE})")
     plt.savefig(os.path.join(OUTPUT_DIR, "loss.png")); plt.close()
 
     plt.figure()
     plt.plot(val_aucs, label="Val AUC")
-    plt.legend(); plt.title("AUC")
+    plt.legend(); plt.title(f"AUC ({DISEASE})")
     plt.savefig(os.path.join(OUTPUT_DIR, "auc.png")); plt.close()

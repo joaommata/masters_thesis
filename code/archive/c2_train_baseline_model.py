@@ -37,11 +37,12 @@ from sklearn.metrics import (
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
-BASE_DIR       = "/zhome/d0/a/221493/thesis"
+DATA_ROOT   = os.environ.get("THESIS_DATA", "/work3/s251710/thesis_data")
+RESULTS_DIR = "/work3/s251710/thesis_results"
 TARGET_DISEASE = "Pneumothorax" # Effusion, Pneumothorax, Cardiomegaly (available so far)
 disease_folder = TARGET_DISEASE.lower()
-DATA_DIR = os.path.join(BASE_DIR, f"results/C0_baseline/{disease_folder}")
-OUTPUT_DIR = os.path.join(BASE_DIR, f"results/C2_baseline/{disease_folder}")
+DATA_DIR = os.path.join(RESULTS_DIR, f"C0_baseline/{disease_folder}")
+OUTPUT_DIR = os.path.join(RESULTS_DIR, f"C2_baseline/{disease_folder}")
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 

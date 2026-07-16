@@ -1,36 +1,44 @@
-# c0_train_resnet50.py
+# c0_train_densenet121_rsna.py
+"""
+C0 DenseNet121 classifier for the RSNA Pneumonia binary task
+('Lung Opacity' vs 'Normal'; the 'No Lung Opacity / Not Normal' class is
+excluded upstream in c0_rsna_split.py).
+
+Same structure/hyperparameters as c0_train_densenet121.py -- the only real
+difference is the dataset reads DICOM instead of JPEG.
+Run c0_rsna_split.py once first to create the split CSVs.
+"""
 import os
 import argparse
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import pydicom
 import torch
 import torch.nn as nn
-import pandas as pd
 from PIL import Image
-from torchvision import models, transforms
-from torch.utils.data import Dataset, DataLoader
 from sklearn.metrics import roc_auc_score
-import matplotlib.pyplot as plt
+from torch.utils.data import Dataset, DataLoader
+from torchvision import models, transforms
 
 # ── Config Constants ─────────────────────────────────────────────────────────
-DATA_ROOT   = os.environ.get("THESIS_DATA", "/work3/s251710/thesis_data")
-disease_col = {
-    "pneumothorax": "Pneumothorax",
-    "effusion": "Pleural Effusion",
-    "cardiomegaly": "Cardiomegaly",
-}
+DATA_ROOT = os.environ.get("THESIS_DATA", "/work3/s251710/thesis_data")
+DATA_DIR = DATA_ROOT + "/"
+TARGET_COL = "Pneumonia"
 
-DATA_DIR   = DATA_ROOT + "/"                
-N_EPOCHS   = 10
+N_EPOCHS = 10
 BATCH_SIZE = 32
-LR         = 1e-4
+LR = 1e-4
 
-DEVICE     = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # ── Dataset ───────────────────────────────────────────────────────────────────
-class CheXpertDataset(Dataset):
-    def __init__(self, df, data_dir, disease, disease_map, transform=None):
-        # Filter dataframe for target disease valid labels (0.0 or 1.0)
-        self.target_col = disease_map[disease]
-        self.df = df[df[self.target_col].isin([0.0, 1.0])].reset_index(drop=True)
+class RSNAPneumoniaDataset(Dataset):
+    def __init__(self, df, data_dir, transform=None):
+        self.df = df[df[TARGET_COL].isin([0.0, 1.0])].reset_index(drop=True)
         self.data_dir = data_dir
         self.transform = transform
 
@@ -39,10 +47,17 @@ class CheXpertDataset(Dataset):
 
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
-        img = Image.open(os.path.join(self.data_dir, row["Path"])).convert("RGB")
+        # RSNA ships 12-bit-ish MONOCHROME2 DICOM; rescale to 8-bit so the
+        # ImageNet normalization below sees the same range as the CheXpert JPEGs.
+        arr = pydicom.dcmread(os.path.join(self.data_dir, row["Path"])).pixel_array
+        arr = arr.astype(np.float32)
+        lo, hi = arr.min(), arr.max()
+        arr = (arr - lo) / (hi - lo) * 255.0 if hi > lo else np.zeros_like(arr)
+        img = Image.fromarray(arr.astype(np.uint8)).convert("RGB")
+
         if self.transform:
             img = self.transform(img)
-        label = torch.tensor(row[self.target_col], dtype=torch.float32)
+        label = torch.tensor(row[TARGET_COL], dtype=torch.float32)
         return img, label
 
 # ── Transforms ────────────────────────────────────────────────────────────────
@@ -55,8 +70,9 @@ transform = transforms.Compose([
 
 # ── Model ─────────────────────────────────────────────────────────────────────
 def build_model():
-    model = models.resnet50(weights='IMAGENET1K_V1')
-    model.fc = nn.Linear(model.fc.in_features, 1)
+    model = models.densenet121(weights='IMAGENET1K_V1')
+    # Replace classifier head with single binary output
+    model.classifier = nn.Linear(model.classifier.in_features, 1)
     return model
 
 # ── One epoch ─────────────────────────────────────────────────────────────────
@@ -88,44 +104,42 @@ def evaluate(model, loader, criterion, device):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    # Setup argument parser
-    parser = argparse.ArgumentParser(description="Train ResNet50 on CheXpert data for a specific disease.")
-    parser.add_argument(
-        "--disease", 
-        type=str, 
-        required=True, 
-        choices=list(disease_col.keys()),
-        help="The disease target to train the model on."
+    parser = argparse.ArgumentParser(
+        description="Train DenseNet121 on RSNA Pneumonia (Lung Opacity vs Normal)."
     )
+    parser.add_argument("--epochs", type=int, default=N_EPOCHS)
+    parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
+    parser.add_argument("--lr", type=float, default=LR)
     args = parser.parse_args()
-    
-    DISEASE = args.disease
-    
-    # Resolve dynamic paths based on selected disease
-    SPLIT_DIR   = f"{DATA_ROOT}/{DISEASE}/"
-    OUTPUT_DIR = f"/work3/s251710/thesis_results/C0_resnet50/{DISEASE}/"
+
+    SPLIT_DIR = f"{DATA_ROOT}/rsna_pneumonia/"
+    OUTPUT_DIR = "/work3/s251710/thesis_results/C0_custom/rsna_pneumonia/"
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    
-    print(f"Starting training pipeline for: {DISEASE.upper()}")
+
+    print("Starting training pipeline for: RSNA_PNEUMONIA (Lung Opacity vs Normal)")
     print(f"Outputs will be saved to: {OUTPUT_DIR}")
 
     train_losses, val_losses, val_aucs = [], [], []
 
     train_df = pd.read_csv(os.path.join(SPLIT_DIR, "c0_train_split.csv"))
-    val_df   = pd.read_csv(os.path.join(SPLIT_DIR, "c0_val_split.csv"))
+    val_df = pd.read_csv(os.path.join(SPLIT_DIR, "c0_val_split.csv"))
+    print(f"train: {len(train_df):,} | val: {len(val_df):,} "
+          f"| prevalence {train_df[TARGET_COL].mean():.1%}")
 
-    train_loader = DataLoader(CheXpertDataset(train_df, DATA_DIR, DISEASE, disease_col, transform),
-                              batch_size=BATCH_SIZE, shuffle=True, num_workers=4, persistent_workers=True, pin_memory=True)
-    val_loader   = DataLoader(CheXpertDataset(val_df, DATA_DIR, DISEASE, disease_col, transform),
-                              batch_size=BATCH_SIZE, shuffle=False, num_workers=4, persistent_workers=True, pin_memory=True)
+    train_loader = DataLoader(RSNAPneumoniaDataset(train_df, DATA_DIR, transform),
+                              batch_size=args.batch_size, shuffle=True, num_workers=4,
+                              persistent_workers=True, pin_memory=True)
+    val_loader = DataLoader(RSNAPneumoniaDataset(val_df, DATA_DIR, transform),
+                            batch_size=args.batch_size, shuffle=False, num_workers=4,
+                            persistent_workers=True, pin_memory=True)
 
     model = build_model().to(DEVICE)
     criterion = nn.BCEWithLogitsLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=LR)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
     best_auc = 0
 
-    for epoch in range(N_EPOCHS):
+    for epoch in range(args.epochs):
         train_loss = train_one_epoch(model, train_loader, optimizer, criterion, DEVICE)
         val_loss, val_auc = evaluate(model, val_loader, criterion, DEVICE)
 
@@ -144,10 +158,10 @@ if __name__ == "__main__":
     plt.figure()
     plt.plot(train_losses, label="Train Loss")
     plt.plot(val_losses, label="Val Loss")
-    plt.legend(); plt.title(f"Loss ({DISEASE})")
+    plt.legend(); plt.title("Loss (rsna_pneumonia)")
     plt.savefig(os.path.join(OUTPUT_DIR, "loss.png")); plt.close()
 
     plt.figure()
     plt.plot(val_aucs, label="Val AUC")
-    plt.legend(); plt.title(f"AUC ({DISEASE})")
+    plt.legend(); plt.title("AUC (rsna_pneumonia)")
     plt.savefig(os.path.join(OUTPUT_DIR, "auc.png")); plt.close()

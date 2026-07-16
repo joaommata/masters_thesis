@@ -10,13 +10,14 @@ import json
 # ══════════════════════════════════════════════════════════════════════════════
 # CONFIG
 # ══════════════════════════════════════════════════════════════════════════════
-BASE_DIR = '/zhome/d0/a/221493/thesis/'
+DATA_ROOT   = os.environ.get("THESIS_DATA", "/work3/s251710/thesis_data")
+RESULTS_DIR = "/work3/s251710/thesis_results"
 DISEASE  = 'effusion'
 MODEL    = 'LR'
 CONFIGS  = ['M6']
 
-matched_json   = BASE_DIR + f"results/C2_sim_cf/{DISEASE}/cv_results/cf_1/cv_detailed.json"
-unmatched_json = BASE_DIR + f"results/C2_sim_cf/{DISEASE}/cv_results_unmatched/cf_1/cv_detailed.json"
+matched_json   = RESULTS_DIR + f"/C2_sim_cf/{DISEASE}/cv_results/cf_1/cv_detailed.json"
+unmatched_json = RESULTS_DIR + f"/C2_sim_cf/{DISEASE}/cv_results_unmatched/cf_1/cv_detailed.json"
 
 CURVE_COLORS = {
     'M6': {'matched': '#009e73', 'unmatched': '#D55E00'},
@@ -148,8 +149,7 @@ plt.tight_layout()
 config_tag = '_vs_'.join(c.lower() for c in CONFIGS)
 
 plt.savefig(
-    os.path.join(BASE_DIR,
-    f'results/C2_sim_cf/{DISEASE}/roc_matched_vs_unmatched_{MODEL.lower()}_{config_tag}.png'),
+    os.path.join(RESULTS_DIR, f'C2_sim_cf/{DISEASE}/roc_matched_vs_unmatched_{MODEL.lower()}_{config_tag}.png'),
     dpi=150
 )
 

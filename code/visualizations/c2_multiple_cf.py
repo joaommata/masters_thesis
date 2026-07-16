@@ -23,8 +23,9 @@ from sklearn.metrics import roc_auc_score, roc_curve
 # ══════════════════════════════════════════════════════════════════════════════
 
 DISEASE    = "effusion"
-BASE_DIR   = "/zhome/d0/a/221493/thesis"
-INPUT_DIR  = os.path.join(BASE_DIR, f"results/C2_sim_cf/{DISEASE}")
+DATA_ROOT   = os.environ.get("THESIS_DATA", "/work3/s251710/thesis_data")
+RESULTS_DIR = "/work3/s251710/thesis_results"
+INPUT_DIR  = os.path.join(RESULTS_DIR, f"C2_sim_cf/{DISEASE}")
 OUTPUT_DIR = os.path.join(INPUT_DIR, "cf_count")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 

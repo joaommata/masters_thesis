@@ -10,8 +10,9 @@ from scipy import interpolate
 # CONFIG
 # ══════════════════════════════════════════════════════════════════════════════
 
-BASE_DIR   = "/zhome/d0/a/221493/thesis"
-INPUT_DIR  = os.path.join(BASE_DIR, "results/C2_sim_cf/effusion/cv_results")
+DATA_ROOT   = os.environ.get("THESIS_DATA", "/work3/s251710/thesis_data")
+RESULTS_DIR = "/work3/s251710/thesis_results"
+INPUT_DIR  = os.path.join(RESULTS_DIR, "C2_sim_cf/effusion/cv_results")
 OUTPUT_DIR = os.path.join(INPUT_DIR, "dataset_size_analysis")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 

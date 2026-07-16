@@ -1,48 +1,54 @@
 """
-c2_cnn_early_fusion.py
-======================
-Early-fusion CNN baselines for C2 quality control under the "correct CF" rule.
+c2_cnn_diffusion_early_fusion.py
+================================
+Early-fusion CNN baselines for C2 quality control using real diffusion-generated
+counterfactuals (see cf_generate_diffusion_counterfactuals.py).
 
-Counterpart to c2_cnn_all.py: instead of encoding each input with its own
+Counterpart to c2_cnn_diffusion.py: instead of encoding each input with its own
 DenseNet and concatenating pooled embeddings (late fusion), all inputs are
-channel-concatenated into a single multi-channel image fed to one DenseNet.
-Because xi, its CF, and their Grad-CAMs are pixel-aligned, the very first
-conv layer can compare the same region across all inputs.
+channel-concatenated into a single multi-channel image fed to one DenseNet, so
+the very first conv layer can compare the same region across all inputs.
 
 To keep results directly comparable with the late-fusion baselines, every input
-is loaded exactly as in c2_cnn_all.py: read as grayscale, replicated to 3
+is loaded exactly as in c2_cnn_diffusion.py: read as grayscale, replicated to 3
 channels, and normalized with ImageNet RGB stats. The only difference between
 the two scripts is the fusion point — here the inputs are channel-concatenated,
 so each contributes 3 channels:
 
-  1. Early Xi              — [xi]                          (3 channels)
-  2. Early CF              — [cf]                           (3 channels)
-  3. Early Xi + Saliency   — [xi, cam_xi]                  (6 channels)
-  4. Early CF + Saliency   — [cf, cam_cf]                  (6 channels)
-  5. Early Dual            — [xi, cf]                      (6 channels)
-  6. Early Dual + Saliency — [xi, cf, cam_xi, cam_cf]      (12 channels)
-  7. Early Dual + Saliency + Scalars — the dual_sal stack plus a per-CF vector
+  1. Xi                — [xi]                     (3 channels)
+  2. CF                 — [cf]                     (3 channels)
+  3. Xi + CF            — [xi, cf]                 (6 channels)
+  4. Xi + Saliency      — [xi, cam_xi]             (6 channels)
+  5. Xi + Saliency + CF — [xi, cam_xi, cf]         (9 channels)
+  6. Xi + Saliency + CF + Scalars — the 9-channel stack plus a per-CF vector
      of C0 prediction scalars [p_xi, H(p_xi), p_cf_k, H(p_cf_k), p_xi − p_cf_k]
      embedded and concatenated at the classifier head
+
+Grad-CAMs exist only for xi (there is no CF-side CAM for diffusion CFs), so
+every saliency config uses cam_xi.
 
 The pretrained DenseNet conv0 (3-channel) is adapted to 3N channels by tiling
 its RGB filters once per input, scaled by 1/N to preserve activation magnitude,
 so each input enters through the same ImageNet weights as in the late-fusion
 encoders; all other layers keep their ImageNet weights.
 
-Counterfactuals: when a fold's `cf_paths` column carries K pipe-separated CF
-paths, every CF-facing dataset builds K channel-stacks (xi and cam_xi repeated
-per CF) of shape (K, 3N, 224, 224). The model is run once per counterfactual
-to get K predictions, which are combined into one final prediction by
-averaging their probabilities — an ensemble over the K counterfactuals,
-mirroring c2_cnn_all.py and the tabular pipeline. Pass --cf_count to select
-which fold set (cf_{K}) to train on.
+Counterfactuals: every query has 3 diffusion counterfactuals available, from
+the manifest cf_manifest_10_0.25_n3.csv (t_start=10, guidance_weight=0.25). The
+manifest is long-format (3 rows per query, keyed by cf_idx); it is pivoted here
+into the pipe-separated `cf_paths` convention the rest of the CNN family uses.
+Pass --cf_count 3 (default) to use all of them, or --cf_count 1 to keep only
+the single most confident CF per query — both read the same manifest, so
+results are directly comparable. CF-facing datasets build K channel-stacks of
+shape (K, 3N, 224, 224), repeating the xi-side channels per CF. The model is
+run once per counterfactual to get K predictions, which are combined into one
+final prediction by averaging their probabilities — an ensemble over the K
+counterfactuals, mirroring c2_cnn_diffusion.py and the rest of the CNN family.
 
-Use --models to train only a subset (default: all six), e.g.:
+Use --models to train only a subset (default: all five), e.g.:
 
-    python c2_cnn_early_fusion.py --models dual dual_sal
+    python c2_cnn_diffusion_early_fusion.py --models xi_cf xi_saliency_cf
 
-Available keys: xi, xi_sal, cf, cf_sal, dual, dual_sal, dual_sal_scalars
+Available keys: xi, cf, xi_cf, xi_saliency, xi_saliency_cf, xi_saliency_cf_scalars
 
 Results for each model are written to their own output directory.
 """
@@ -60,16 +66,27 @@ import torch.nn.functional as F
 from torch.cuda.amp import autocast, GradScaler
 from PIL import Image
 from sklearn.metrics import roc_auc_score, roc_curve
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import StratifiedKFold, train_test_split
 from torch.utils.data import DataLoader, Dataset
 from torchvision import models, transforms
 
 # ── Config ─────────────────────────────────────────────────────────────────────
-MODEL_CHOICES = ['xi', 'xi_sal', 'cf', 'cf_sal', 'dual', 'dual_sal', 'dual_sal_scalars']
+MODEL_CHOICES = ['xi', 'cf', 'xi_cf', 'xi_saliency', 'xi_saliency_cf',
+                 'xi_saliency_cf_scalars']
+
+# Both counts are read from the same manifest (t_start=10, w=0.25, 3 CFs/query
+# generated); --cf_count 1 just keeps the single best CF per query instead of
+# all 3, so K=1 and K=3 runs are directly comparable (same generation settings).
+T_START           = 10
+GUIDANCE_WEIGHT   = 0.25
+MANIFEST_CF_COUNT = 3
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--disease', type=str, default='effusion')
-parser.add_argument('--cf_count', type=int, default=1)
+parser.add_argument('--cf_count', type=int, default=3, choices=[1, 3],
+                    help="Counterfactuals per query to use. 3 uses every CF in the "
+                         "manifest; 1 keeps only the single best CF per query "
+                         "(flipped if any, else best-attempt).")
 parser.add_argument(
     '--models', type=str, nargs='+', default=MODEL_CHOICES, choices=MODEL_CHOICES,
     help=(
@@ -79,12 +96,14 @@ parser.add_argument(
 )
 parser.add_argument('--val_frac', type=float, default=0.15,
                     help="Fraction of each fold's train split held out for validation "
-                         "(early stopping / checkpoint selection).")
+                         "(checkpoint selection).")
 parser.add_argument('--seed', type=int, default=42,
-                    help="Seed for the train/val split (fixed for reproducibility).")
+                    help="Seed for the train/val split (fixed for reproducibility, "
+                         "and shared across separate --models job submissions so "
+                         "every config sees the same split per fold).")
 parser.add_argument('--batch_size', type=int, default=32,
-                    help="Training/eval batch size. Lower for memory-heavy configs "
-                         "(high cf_count) to avoid CUDA OOM.")
+                    help="Training/eval batch size. Early fusion pushes batch*K stacks "
+                         "through one DenseNet, so lower this if you hit CUDA OOM.")
 args = parser.parse_args()
 
 DISEASE      = args.disease
@@ -94,26 +113,31 @@ VAL_FRAC     = args.val_frac
 SEED         = args.seed
 DATA_ROOT   = os.environ.get("THESIS_DATA", "/work3/s251710/thesis_data")
 RESULTS_DIR = "/work3/s251710/thesis_results"
-DATA_DIR   = DATA_ROOT
-CV_DIR     = os.path.join(RESULTS_DIR, f"C2_custom_corrected/{DISEASE}/cv_results_correct_cf/cf_{CF_COUNT}")
-C2_DATA_CSV = os.path.join(RESULTS_DIR, f"C2_custom/{DISEASE}/c2_data.csv")
-RES_BASE   = os.path.join(RESULTS_DIR, "C2_cnn")
-CAM_BASE   = os.path.join(RESULTS_DIR, f"C0_custom/{DISEASE}/gradcam")
-N_FOLDS    = 5
-N_EPOCHS   = 10
-BATCH_SIZE = args.batch_size
-LR         = 1e-4
-DEVICE     = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+DATA_DIR     = DATA_ROOT
+C2_DATA_CSV  = os.path.join(RESULTS_DIR, f"C2_custom/{DISEASE}/c2_data.csv")
+MANIFEST_PATH = os.path.join(RESULTS_DIR, f"diffusion_cf/cf_manifest_{T_START}_{GUIDANCE_WEIGHT}_n{MANIFEST_CF_COUNT}.csv")
+RES_BASE     = os.path.join(RESULTS_DIR, "C2_cnn_diffusion")
+CAM_BASE     = os.path.join(RESULTS_DIR, f"C0_custom/{DISEASE}/gradcam")
+N_FOLDS      = 5
+RANDOM_SEED  = 42
+N_EPOCHS     = 10
+BATCH_SIZE   = args.batch_size
+LR           = 1e-4
+DEVICE       = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.manual_seed(SEED)
 torch.cuda.manual_seed_all(SEED)
 print(f"Disease: {DISEASE} | CF count: {CF_COUNT}")
+print(f"Manifest: {os.path.basename(MANIFEST_PATH)}")
 print(f"Models to train: {SELECTED}")
 print("Using device:", DEVICE)
 
 # ── Transforms ─────────────────────────────────────────────────────────────────
-# Identical to the late-fusion pipeline in c2_cnn_all.py: every input — image or
-# CAM — is replicated to 3 channels and normalized with ImageNet RGB stats, so
-# the only difference between the two scripts is where the streams are fused.
+# Identical to the late-fusion pipeline in c2_cnn_diffusion.py: every input —
+# image or CAM — is replicated to 3 channels and normalized with ImageNet RGB
+# stats, so the only difference between the two scripts is where the streams
+# are fused. Resize((224,224)) is an anisotropic squash, and deliberately so:
+# it is the transform the CF generator applied, and it is what keeps xi
+# pixel-aligned with its counterfactual. Do not replace it with a crop.
 transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
@@ -125,7 +149,11 @@ _cam_normalize = transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.22
 
 # ── Input helpers ──────────────────────────────────────────────────────────────
 def _load_img(img_path, data_dir):
-    """Load an image as a (3,224,224) normalized tensor (grayscale replicated)."""
+    """Load an image as a (3,224,224) normalized tensor (grayscale replicated).
+
+    Manifest `cf_path` values are absolute, so os.path.join discards data_dir for
+    counterfactuals; query `path` values are relative to it.
+    """
     img = Image.open(os.path.join(data_dir, img_path)).convert('RGB')
     return transform(img)
 
@@ -146,7 +174,7 @@ def _load_cam(img_path):
 
 
 def _split_cf_paths(value):
-    """cf_paths holds K pipe-separated paths (K = CF_COUNT for this fold set)."""
+    """cf_paths holds K pipe-separated paths (K = CF_COUNT)."""
     return [p.strip() for p in str(value).split('|')]
 
 
@@ -169,31 +197,78 @@ def _make_scalars(p_xi, cf_probs):
          for p_cf in cf_probs], dtype=torch.float32)
 
 
-def _nearest_cf_only(df):
-    """Train-time view of a fold df: keep only the nearest (first) CF, so each
-    sample contributes ONE stack per epoch. cf_paths lists are nearest-first
-    (verified: cf_16 first entry == cf_1's single entry on every row), and
-    cf_probs is aligned with cf_paths. K-CF ensembling happens at eval only,
-    matching the tabular pipelines' protocol (train base on nearest CF,
-    combine k scores at test)."""
-    df = df.copy()
-    df['cf_paths'] = df['cf_paths'].map(lambda v: _split_cf_paths(v)[0])
-    if 'cf_probs' in df.columns:
-        df['cf_probs'] = df['cf_probs'].map(lambda v: str(v).split('|')[0])
-    return df
+# ── Fold data builder ──────────────────────────────────────────────────────────
+def build_fold_dfs():
+    """Attach the diffusion CF paths per query, then split into N_FOLDS
+    stratified folds (stratified on `correct`).
 
+    The manifest is long-format (columns path, cf_idx, cf_path, cf_prob,
+    flipped — one row per CF, K=MANIFEST_CF_COUNT rows per query). It is
+    pivoted into a single pipe-separated `cf_paths` cell per query, matching
+    the convention the rest of the CNN family uses.
 
-def _attach_scalar_cols(fold_dfs):
-    """Add `query_prob` and pipe-separated per-CF `cf_probs` columns in place.
-    The fold CSVs only store the mean CF probability, but every KNN CF is a
-    real training image whose C0 probability lives in c2_data.csv (column
-    `prob`), so per-CF values are recovered by path lookup."""
-    c2 = pd.read_csv(C2_DATA_CSV, usecols=['path', 'prob'])
-    lookup = dict(zip(c2['path'], c2['prob']))
-    for df in fold_dfs:
-        df['query_prob'] = df[f'{DISEASE}_prob']
-        df['cf_probs'] = df['cf_paths'].map(
-            lambda v: '|'.join(str(lookup[p]) for p in _split_cf_paths(v)))
+    CF selection mirrors c2_cv_pipeline_diffusion_cf.py: keep the CFs that
+    actually flipped the classifier; for any query where none flipped, fall
+    back to the best attempt (the CF whose probability is furthest from 0.5).
+    Within each query, CFs are ranked by that same "furthest from 0.5"
+    confidence and truncated to the requested CF_COUNT — so --cf_count 1 keeps
+    the single most confident CF per query rather than an arbitrary one, and
+    --cf_count 3 keeps all of them (order doesn't matter for the latter, since
+    ensembling averages predictions over K). Queries left with fewer CFs than
+    requested (only possible if fewer than CF_COUNT flipped) are padded by
+    repeating their best CF, so every row carries exactly CF_COUNT.
+    """
+    df = pd.read_csv(C2_DATA_CSV, usecols=['path', 'prob', 'correct'])
+    df = df.rename(columns={'prob': 'query_prob'})
+    manifest = pd.read_csv(MANIFEST_PATH)
+
+    n_total, n_flip = len(manifest), int(manifest['flipped'].sum())
+    print(f"  Manifest: {n_total:,} CFs, {n_flip:,} flipped ({n_flip/max(n_total,1):.1%})")
+
+    manifest = manifest.copy()
+    manifest['dist_from_mid'] = (manifest['cf_prob'] - 0.5).abs()
+    ranked = manifest.sort_values(['path', 'dist_from_mid'], ascending=[True, False])
+
+    flipped = ranked[ranked['flipped'] == 1]
+    cf_lists = flipped.groupby('path')['cf_path'].apply(list)
+
+    # Best-attempt fallback for queries where no CF flipped: rank all CFs
+    # (flipped or not) by confidence and use the best ones instead.
+    missing = set(manifest['path']) - set(cf_lists.index)
+    if missing:
+        print(f"  Fallback: {len(missing)} quer{'y' if len(missing)==1 else 'ies'} "
+              f"had no flipped CF — using best-attempt CF")
+        un = ranked[ranked['path'].isin(missing)]
+        cf_lists = pd.concat([cf_lists, un.groupby('path')['cf_path'].apply(list)])
+
+    # Truncate to the CF_COUNT most confident CFs, padding by cycling if a
+    # query has fewer than CF_COUNT available.
+    def _select(paths):
+        return [paths[i % len(paths)] for i in range(CF_COUNT)]
+
+    cf_paths = cf_lists.apply(_select).apply('|'.join).rename('cf_paths')
+    best_cf = cf_paths.reset_index()
+
+    df = df.merge(best_cf, on='path', how='inner')
+    n_cfs = df['cf_paths'].map(lambda v: len(_split_cf_paths(v)))
+    assert (n_cfs == CF_COUNT).all(), f"expected {CF_COUNT} CFs/query, got {n_cfs.unique()}"
+
+    # Per-CF C0 probabilities for the scalar configs. Manifest cf_path values
+    # are globally unique, so mapping each selected path through a lookup
+    # reproduces the exact truncation/cycling applied to cf_paths above,
+    # keeping paths and probs 1:1 by construction.
+    prob_lookup = dict(zip(manifest['cf_path'], manifest['cf_prob']))
+    df['cf_probs'] = df['cf_paths'].map(
+        lambda v: '|'.join(str(prob_lookup[p]) for p in _split_cf_paths(v)))
+
+    print(f"Samples with diffusion CF: {len(df):,}  "
+          f"(Correct: {(df['correct']==1).sum():,} | Incorrect: {(df['correct']==0).sum():,})")
+
+    skf = StratifiedKFold(n_splits=N_FOLDS, shuffle=True, random_state=RANDOM_SEED)
+    fold_dfs = [None] * N_FOLDS
+    for fold_idx, (_, test_idx) in enumerate(skf.split(df, df['correct'])):
+        fold_dfs[fold_idx] = df.iloc[test_idx].reset_index(drop=True)
+    return fold_dfs
 
 
 # ── Datasets ───────────────────────────────────────────────────────────────────
@@ -232,39 +307,7 @@ class CFDataset(Dataset):
         return torch.stack(stacks), float(row['correct'])
 
 
-class XiSalDataset(Dataset):
-    """[xi, cam_xi] → (6, 224, 224)."""
-    def __init__(self, df, data_dir):
-        self.df, self.data_dir = df.reset_index(drop=True), data_dir
-
-    def __len__(self):
-        return len(self.df)
-
-    def __getitem__(self, idx):
-        row = self.df.iloc[idx]
-        xi_path = str(row['path'])
-        stack = torch.cat([_load_img(xi_path, self.data_dir), _load_cam(xi_path)])
-        return stack, float(row['correct'])
-
-
-class CFSalDataset(Dataset):
-    """[cf_k, cam_cf_k] per CF → (K, 6, 224, 224)."""
-    def __init__(self, df, data_dir):
-        self.df, self.data_dir = df.reset_index(drop=True), data_dir
-
-    def __len__(self):
-        return len(self.df)
-
-    def __getitem__(self, idx):
-        row = self.df.iloc[idx]
-        stacks = [
-            torch.cat([_load_img(cf_path, self.data_dir), _load_cam(cf_path)])
-            for cf_path in _split_cf_paths(row['cf_paths'])
-        ]
-        return torch.stack(stacks), float(row['correct'])
-
-
-class DualDataset(Dataset):
+class XiCFDataset(Dataset):
     """[xi, cf_k] per CF → (K, 6, 224, 224)."""
     def __init__(self, df, data_dir):
         self.df, self.data_dir = df.reset_index(drop=True), data_dir
@@ -282,8 +325,23 @@ class DualDataset(Dataset):
         return torch.stack(stacks), float(row['correct'])
 
 
-class DualSalDataset(Dataset):
-    """[xi, cf_k, cam_xi, cam_cf_k] per CF → (K, 12, 224, 224)."""
+class XiSalDataset(Dataset):
+    """[xi, cam_xi] → (6, 224, 224). No CF, so K=1 (broadcast at ensembling time)."""
+    def __init__(self, df, data_dir):
+        self.df, self.data_dir = df.reset_index(drop=True), data_dir
+
+    def __len__(self):
+        return len(self.df)
+
+    def __getitem__(self, idx):
+        row = self.df.iloc[idx]
+        xi_path = str(row['path'])
+        stack = torch.cat([_load_img(xi_path, self.data_dir), _load_cam(xi_path)])
+        return stack, float(row['correct'])
+
+
+class XiSalCFDataset(Dataset):
+    """[xi, cam_xi, cf_k] per CF → (K, 9, 224, 224)."""
     def __init__(self, df, data_dir):
         self.df, self.data_dir = df.reset_index(drop=True), data_dir
 
@@ -296,16 +354,15 @@ class DualSalDataset(Dataset):
         xi     = _load_img(xi_path, self.data_dir)
         xi_cam = _load_cam(xi_path)
         stacks = [
-            torch.cat([xi, _load_img(cf_path, self.data_dir),
-                       xi_cam, _load_cam(cf_path)])
+            torch.cat([xi, xi_cam, _load_img(cf_path, self.data_dir)])
             for cf_path in _split_cf_paths(row['cf_paths'])
         ]
         return torch.stack(stacks), float(row['correct'])
 
 
-class DualSalScalarDataset(Dataset):
-    """[xi, cf_k, cam_xi, cam_cf_k] per CF → (K, 12, 224, 224), plus the C0
-    prediction scalars → (K, 5)."""
+class XiSalCFScalarDataset(Dataset):
+    """[xi, cam_xi, cf_k] per CF → (K, 9, 224, 224), plus the C0 prediction
+    scalars → (K, 5)."""
     def __init__(self, df, data_dir):
         self.df, self.data_dir = df.reset_index(drop=True), data_dir
 
@@ -318,8 +375,7 @@ class DualSalScalarDataset(Dataset):
         xi     = _load_img(xi_path, self.data_dir)
         xi_cam = _load_cam(xi_path)
         stacks = [
-            torch.cat([xi, _load_img(cf_path, self.data_dir),
-                       xi_cam, _load_cam(cf_path)])
+            torch.cat([xi, xi_cam, _load_img(cf_path, self.data_dir)])
             for cf_path in _split_cf_paths(row['cf_paths'])
         ]
         scalars = _make_scalars(float(row['query_prob']),
@@ -383,10 +439,11 @@ class EarlyFusionScalarCNN(EarlyFusionCNN):
 
 
 # ── CF ensembling ──────────────────────────────────────────────────────────────
-# Every dataset yields K channel-stacks per sample as (B, K, C, H, W). We fold
-# K into the batch dimension, run the model once per (sample, CF) pair to get
-# K logits per sample, then average the K *probabilities* (not the logits)
-# into one final prediction — an ensemble over the K counterfactuals.
+# A sample's input is either a single stack (B, C, H, W), for configs with no
+# CF, or K stacks (B, K, C, H, W) — one per counterfactual. We fold K into the
+# batch dimension, run the model once per (sample, CF) pair to get K logits per
+# sample, then average the K *probabilities* (not the logits) into one final
+# prediction — an ensemble over the K counterfactuals.
 def _flatten_k(x):
     """(B, C, H, W) -> (B, C, H, W) with K=1, or (B, K, C, H, W) -> (B*K, C, H, W).
     Always returns (flattened, B, K)."""
@@ -523,20 +580,14 @@ def run_cv(name, fold_dfs, dataset_cls, make_model, output_dir, with_scalars=Fal
         train_df = pd.concat([fold_dfs[i] for i in range(N_FOLDS) if i != test_fold],
                              ignore_index=True)
 
-        # Carve a validation split out of train for early stopping / checkpoint
-        # selection, so the test fold is only ever touched once (after training).
+        # Carve a validation split out of train for checkpoint selection, so the
+        # test fold is only ever touched once (after training).
         train_sub_df, val_df = train_test_split(
             train_df, test_size=VAL_FRAC, stratify=train_df['correct'],
             random_state=SEED,
         )
         train_sub_df = train_sub_df.reset_index(drop=True)
         val_df       = val_df.reset_index(drop=True)
-
-        # Training uses only the nearest CF per sample; val/test keep all K so
-        # checkpoint selection sees the same K-ensemble protocol as the final
-        # test evaluation.
-        if 'cf_paths' in train_sub_df.columns:
-            train_sub_df = _nearest_cf_only(train_sub_df)
         print(f"  Train: {len(train_sub_df):,}  |  Val: {len(val_df):,}  |  Test: {len(test_df):,}")
 
         train_loader = DataLoader(dataset_cls(train_sub_df, DATA_DIR),
@@ -603,22 +654,14 @@ def run_cv(name, fold_dfs, dataset_cls, make_model, output_dir, with_scalars=Fal
 # ── Main ───────────────────────────────────────────────────────────────────────
 if __name__ == '__main__':
 
-    fold_dfs = [
-        pd.read_csv(os.path.join(CV_DIR, f'fold_{i}_predictions.csv'))
-        for i in range(N_FOLDS)
-    ]
+    fold_dfs = build_fold_dfs()
 
-    # Scalar configs need per-CF C0 probabilities, recovered by path lookup
-    # from c2_data.csv (a wide file — only read it when actually needed).
-    if any(key.endswith('_scalars') for key in SELECTED):
-        _attach_scalar_cols(fold_dfs)
-
-    # results/C2_cnn/{disease}/early/{config}/cf_{K}/ — "early" distinguishes
-    # this script's outputs from c2_cnn_all.py's under the same RES_BASE;
-    # config names match 1:1 across both scripts.
+    # results/C2_cnn_diffusion/{disease}/early/{config}/cf_{K}/ — "early"
+    # distinguishes this script's outputs from c2_cnn_diffusion.py's under the
+    # same RES_BASE; config names match 1:1 across both scripts.
     out = lambda name: os.path.join(RES_BASE, DISEASE, 'early', name, f'cf_{CF_COUNT}')
 
-    # Registry of all six early-fusion configurations. Each entry is the kwarg
+    # Registry of all five early-fusion configurations. Each entry is the kwarg
     # set passed straight to run_cv(). Only the keys in --models are executed.
     MODEL_REGISTRY = {
         'xi': dict(
@@ -633,35 +676,29 @@ if __name__ == '__main__':
             make_model  = lambda: EarlyFusionCNN(in_channels=3),
             output_dir  = out('cf'),
         ),
-        'xi_sal': dict(
+        'xi_cf': dict(
+            name        = 'Early Fusion Xi + CF',
+            dataset_cls = XiCFDataset,
+            make_model  = lambda: EarlyFusionCNN(in_channels=6),
+            output_dir  = out('xi_cf'),
+        ),
+        'xi_saliency': dict(
             name        = 'Early Fusion Xi + Saliency',
             dataset_cls = XiSalDataset,
             make_model  = lambda: EarlyFusionCNN(in_channels=6),
-            output_dir  = out('xi_sal'),
+            output_dir  = out('xi_saliency'),
         ),
-        'cf_sal': dict(
-            name        = 'Early Fusion CF + Saliency',
-            dataset_cls = CFSalDataset,
-            make_model  = lambda: EarlyFusionCNN(in_channels=6),
-            output_dir  = out('cf_sal'),
+        'xi_saliency_cf': dict(
+            name        = 'Early Fusion Xi + Saliency + CF',
+            dataset_cls = XiSalCFDataset,
+            make_model  = lambda: EarlyFusionCNN(in_channels=9),
+            output_dir  = out('xi_saliency_cf'),
         ),
-        'dual': dict(
-            name        = 'Early Fusion Xi + CF',
-            dataset_cls = DualDataset,
-            make_model  = lambda: EarlyFusionCNN(in_channels=6),
-            output_dir  = out('dual'),
-        ),
-        'dual_sal': dict(
-            name        = 'Early Fusion Xi + CF + Saliency',
-            dataset_cls = DualSalDataset,
-            make_model  = lambda: EarlyFusionCNN(in_channels=12),
-            output_dir  = out('dual_sal'),
-        ),
-        'dual_sal_scalars': dict(
-            name        = 'Early Fusion Xi + CF + Saliency + Scalars',
-            dataset_cls = DualSalScalarDataset,
-            make_model  = lambda: EarlyFusionScalarCNN(in_channels=12),
-            output_dir  = out('dual_sal_scalars'),
+        'xi_saliency_cf_scalars': dict(
+            name        = 'Early Fusion Xi + Saliency + CF + Scalars',
+            dataset_cls = XiSalCFScalarDataset,
+            make_model  = lambda: EarlyFusionScalarCNN(in_channels=9),
+            output_dir  = out('xi_saliency_cf_scalars'),
             with_scalars = True,
         ),
     }

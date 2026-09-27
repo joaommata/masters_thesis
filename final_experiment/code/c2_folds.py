@@ -61,7 +61,9 @@ from sklearn.model_selection import StratifiedGroupKFold
 from sklearn.preprocessing import StandardScaler
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from c2_cf_sources import build_cf_source, CF_SOURCE_KINDS, KNN_STRATEGIES  # noqa: E402
+from c2_cf_sources import (                                     # noqa: E402
+    build_cf_source, CF_SOURCE_KINDS, KNN_STRATEGIES, load_subset, subset_path,
+)
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, os.path.join(REPO, "code", "c2"))
@@ -108,11 +110,17 @@ def pairing_path(disease, source_name, cf_count, fold=None):
 # LOAD BASE DATA
 # ══════════════════════════════════════════════════════════════════════════════
 
-def load_c2_data(disease):
+def load_c2_data(disease, subset=None):
     """Read c2_data.csv and rename C0's columns to their disease-qualified names.
 
     The CF code addresses them as <disease>_prob / _pred / _true; c2_build_dataset
     writes them as plain prob / pred / true.
+
+    `subset` is a list of image paths to restrict to, and this is the ONLY place
+    that restriction happens. Fold membership and the KNN counterfactual pool are
+    both derived from the frame returned here, so they cannot drift apart -- a
+    second subsetting path would let the KNN arm retrieve from rows it never
+    trains on.
     """
     path = c2_data_path(disease)
     if not os.path.exists(path):
@@ -133,6 +141,17 @@ def load_c2_data(disease):
     if len(df) < n_before:
         print(f"  dropped {n_before - len(df):,} rows with undefined correctness")
     df["correct"] = df["correct"].astype(int)
+
+    if subset is not None:
+        missing = sorted(set(subset) - set(df["path"]))
+        if missing:
+            raise ValueError(
+                f"{len(missing)} of the {len(subset):,} subset paths are not rows "
+                f"of {path} (first: {missing[0]!r}). The subset was frozen against "
+                f"a different c2_data.csv.")
+        n_before = len(df)
+        df = df[df["path"].isin(set(subset))].reset_index(drop=True)
+        print(f"  subset: {len(df):,} of {n_before:,} rows kept")
     return df
 
 
@@ -316,7 +335,7 @@ class _AttrOnlyContext:
     a login node.
     """
 
-    def __init__(self, disease, pair_train):
+    def __init__(self, disease, pair_train, subset=None):
         path = c2_data_path(disease)
         head = pd.read_csv(path, nrows=0)
         keep = [c for c in head.columns if not c.startswith("emb_")]
@@ -325,6 +344,8 @@ class _AttrOnlyContext:
                                 "pred": f"{disease}_pred",
                                 "true": f"{disease}_true"})
         df = df[df["correct"].notna()].reset_index(drop=True)
+        if subset is not None:
+            df = df[df["path"].isin(set(subset))].reset_index(drop=True)
         df = add_clinical_ratios(df)
         rel = _relevant_cols(df, disease)
         df[rel] = df[rel].fillna(0)
@@ -350,7 +371,7 @@ def _is_tie(ctx, query, cf_a, cf_b, distance):
 
 
 def check_nesting(disease, source_name, k_small, k_large, n_folds=N_FOLDS,
-                  distance=None):
+                  distance=None, subset=None):
     """Assert the K=k_small pairing on disk is the prefix of the K=k_large one.
 
     Run this once after building a large-K pairing: it is the empirical proof of
@@ -397,7 +418,7 @@ def check_nesting(disease, source_name, k_small, k_large, n_folds=N_FOLDS,
         # Built per fold and dropped afterwards: the scaler is fold-specific, and
         # holding five at once is what pushed this over a login node's cap.
         tr = read_pairing(disease, source_name, k_small, i)
-        ctx = _AttrOnlyContext(disease, tr[tr["split"] == "train"])
+        ctx = _AttrOnlyContext(disease, tr[tr["split"] == "train"], subset=subset)
 
         fold_ties, fold_real = 0, []
         for j in diff:
@@ -454,7 +475,7 @@ def build_folds(disease, cf_source, cf_count, n_folds=N_FOLDS, seed=RANDOM_SEED,
     print(f"  BUILDING FOLDS: {disease} | {cf_source.describe()} | K={cf_count}")
     print(f"{'='*72}")
 
-    df = load_c2_data(disease)
+    df = load_c2_data(disease, subset=cf_source.subset_paths(disease))
     print(f"  {len(df):,} samples | correct {int((df['correct']==1).sum()):,} "
           f"| incorrect {int((df['correct']==0).sum()):,}")
 
@@ -467,6 +488,12 @@ def build_folds(disease, cf_source, cf_count, n_folds=N_FOLDS, seed=RANDOM_SEED,
     # head, both need the individual values. Storing them here also removes the
     # trainers' dependency on re-reading c2_data.csv to recover them.
     prob_lut = dict(zip(df["path"], df[f"{disease}_prob"]))
+    # A generated counterfactual is not a row of c2_data.csv and has no
+    # probability there. Merging the source's own table in here is the whole fix:
+    # _per_cf_probs stays untouched and still raises for a genuinely unknown
+    # path, and the drift assert below becomes a free check that the source's
+    # averaged cf_prob and the paths it wrote down describe the same images.
+    prob_lut.update(cf_source.cf_prob_lut(disease))
 
     fold_meta = []
     for i, (tr_idx, te_idx) in enumerate(skf.split(df, y, groups=groups)):
@@ -543,7 +570,9 @@ def _row_ids(paths, row_of, what):
                            count=len(paths))
     except KeyError as exc:
         raise ValueError(
-            f"{what} path absent from c2_data.csv: {exc.args[0]!r}") from None
+            f"{what} path absent from the fold's base frame: {exc.args[0]!r}. "
+            f"For a query that means c2_data.csv (or the active --subset); for a "
+            f"generated CF it means the source's aux_table did not supply it.") from None
 
 
 def _cf_row_ids(cf_paths, row_of):
@@ -608,7 +637,9 @@ class FoldContext:
         base[self.rel] = base[self.rel].fillna(0)
 
         self.lut = base.set_index("path")
-        assert self.lut.index.is_unique, "c2_data.csv has duplicate paths"
+        assert self.lut.index.is_unique, (
+            "duplicate paths in the fold's base frame -- a generated CF path "
+            "has collided with a real image path, or with another CF")
         self.row_of = {p: i for i, p in enumerate(self.lut.index)}
 
         # Dense views. Every lookup below is a row gather, and doing those through
@@ -727,6 +758,15 @@ class MaterializedFold:
             self._slots[j] = materialize(self.ctx, slot_pairing(self._pair_test, j))
         return self._slots[j]
 
+    def train_slot(self, j, rows):
+        """Train queries `rows` (positional, in `train` order) paired with their j-th CF.
+
+        Training only ever uses slot 0, so this exists for a held-out slice of the
+        train side that must be scored like the test side -- K frames, one per CF.
+        Not cached: callers ask for a subset, once.
+        """
+        return materialize(self.ctx, slot_pairing(self._pair_train.iloc[rows], j))
+
     @property
     def test_paths(self):
         return self._pair_test["path"].values
@@ -775,10 +815,22 @@ def load_folds(disease, cf_source, cf_count, n_folds=N_FOLDS, materialize=True,
                 f"--cf-count {cf_count}")
         build_folds(disease, cf_source, cf_count, n_folds=n_folds)
 
-    base = load_c2_data(disease)
+    base = load_c2_data(disease, subset=cf_source.subset_paths(disease))
     if not materialize:
+        # The CNN opens counterfactual images straight off disk and takes their
+        # probabilities from the pairing, so it needs no aux rows -- only the
+        # attribute ladder dereferences a CF path into a feature vector.
         need = set(columns or []) | {"path"}
         base = base[[c for c in base.columns if c in need]]
+    else:
+        aux = cf_source.aux_table(disease, cf_count, columns=list(base.columns))
+        if aux is not None:
+            print(f"  + {len(aux):,} generated counterfactual rows "
+                  f"({cf_count} level{'s' if cf_count != 1 else ''})")
+            base = pd.concat([base, aux], ignore_index=True)
+            # CF rows have no correctness of their own; they are never scored as
+            # queries, only dereferenced for their attributes and embedding.
+            base["correct"] = base["correct"].fillna(-1).astype(int)
 
     for i in range(n_folds):
         f = read_pairing(disease, cf_source.name, cf_count, i)
@@ -813,12 +865,19 @@ def add_cf_args(p):
     p.add_argument("--k-offset", type=int, default=0,
                    help="knn/further only: take the (k_offset + k)-th neighbour")
     p.add_argument("--n-folds", type=int, default=N_FOLDS)
+    p.add_argument("--subset", default="",
+                   help="name of a frozen path list under "
+                        "C2_final/<disease>/subsets/<name>.txt. Restricts the "
+                        "folds AND the CF pool to those rows, and appends "
+                        "_sub<name> to the source name so the results land "
+                        "beside the full-set ones rather than on top of them.")
     return p
 
 
 def cf_source_from_args(args):
     return build_cf_source(args.cf_source, strategy=args.cf_strategy,
-                           distance=args.distance, k_offset=args.k_offset)
+                           distance=args.distance, k_offset=args.k_offset,
+                           subset=getattr(args, "subset", ""))
 
 
 if __name__ == "__main__":
@@ -844,7 +903,8 @@ if __name__ == "__main__":
 
     if args.check_nesting is not None:
         check_nesting(args.disease, src.name, args.check_nesting, args.cf_count,
-                      n_folds=args.n_folds)
+                      n_folds=args.n_folds,
+                      subset=src.subset_paths(args.disease))
     elif args.derive or args.derive_from is not None:
         got = derive_pairing(args.disease, src.name, args.cf_count,
                              k_from=args.derive_from, n_folds=args.n_folds,

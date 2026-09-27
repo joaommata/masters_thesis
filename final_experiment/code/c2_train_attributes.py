@@ -72,7 +72,9 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.neural_network import MLPClassifier
+from sklearn.model_selection import GroupShuffleSplit
 from sklearn.metrics import roc_auc_score, roc_curve
+from scipy.special import expit
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from c2_folds import (                                          # noqa: E402
@@ -245,18 +247,51 @@ def predict_model(model, scaler, X, model_type):
     return model.predict_proba(scaler.transform(X))[:, 1]
 
 
+def mlp_forward(model, scaler, X):
+    """(last hidden layer (n, 16), P(correct) (n,)) of a fitted MLPClassifier.
+
+    sklearn has no forward hooks, so the hidden layers are replayed from the
+    stored weights. The output is recomputed from that same hidden layer and
+    checked against predict_proba, so the embedding is provably the one the
+    model's own prediction was read from.
+    """
+    if model.activation != "relu":
+        raise ValueError(f"mlp_forward replays ReLU layers, model uses {model.activation}")
+    a = scaler.transform(X.astype(np.float32))
+    for W, b in zip(model.coefs_[:-1], model.intercepts_[:-1]):
+        a = np.maximum(a @ W + b, 0)
+    p = expit((a @ model.coefs_[-1] + model.intercepts_[-1]).ravel())   # overflow-safe sigmoid, as sklearn
+    np.testing.assert_allclose(p, predict_model(model, scaler, X, "MLP"), atol=1e-4)
+    return a, p
+
+
 def score_cf_anchor(train_df, test_slots):
     """Baseline: score a (query, CF) pair by the mean correctness of training rows
-    that retrieved the same counterfactual. Returns the per-slot matrix.
+    that retrieved the same counterfactual. Returns the per-slot matrix, or None
+    if the counterfactuals are not shared between queries.
 
     Measures how much of the signal is carried by WHICH CF was picked, before any
     feature is looked at. Returned per slot, and averaged by the caller, so it is
     ensembled exactly like every model above and stays comparable as K moves
     rather than quietly changing definition.
+
+    It is only defined for a RETRIEVAL source. A generated counterfactual is
+    produced from its own query and belongs to no other, so every anchor group
+    has size one, no test CF is ever in the train dict, every score falls back to
+    0.0 and roc_auc_score returns exactly 0.5 -- for every fold, silently, and
+    looking for all the world like a measured null result. Detected here and
+    reported as unavailable instead.
     """
     anchor = {}
     for a, corr in zip(train_df["cf_paths"], train_df["correct"]):
         anchor.setdefault(str(a), []).append(corr)
+
+    # A retrieval source reuses popular counterfactuals heavily; a generative one
+    # never reuses any. The gap is not marginal, so a simple threshold separates
+    # them without needing to ask the source what kind it is.
+    if len(anchor) == len(train_df) and len(train_df) > 1:
+        return None
+
     anchor = {a: float(np.mean(v)) for a, v in anchor.items()}
     return np.stack([np.array([anchor.get(str(a), 0.0) for a in slot["cf_paths"]])
                      for slot in test_slots])
@@ -325,22 +360,27 @@ def run(args):
                 f"same queries")
 
         anchor_slots = score_cf_anchor(train_df, slots)
-        anchor_auc = float(roc_auc_score(y_test, anchor_slots.mean(axis=0)))
-        results["cf_anchor"].append(anchor_auc)
-        print(f"  CF-anchor baseline AUC: {anchor_auc:.4f}")
+        if anchor_slots is None:
+            print("  CF-anchor baseline: N/A -- every counterfactual is unique to "
+                  "its query, so there is no anchor to score")
+        else:
+            anchor_auc = float(roc_auc_score(y_test, anchor_slots.mean(axis=0)))
+            results["cf_anchor"].append(anchor_auc)
+            print(f"  CF-anchor baseline AUC: {anchor_auc:.4f}")
 
         pred_df = slots[0][["path", "patient_id", f"{args.disease}_prob",
                             "correct"]].copy()
         pred_df["cf_paths"] = fold.test_cf_paths
         pred_df["cf_prob"] = np.mean(
             [sl["cf_prob"].values for sl in slots], axis=0)
-        pred_df["cf_anchor_prob"] = anchor_slots.mean(axis=0)
+        if anchor_slots is not None:
+            pred_df["cf_anchor_prob"] = anchor_slots.mean(axis=0)
 
         # Per-slot probabilities, kept so a smaller K can be read off this run.
         # The model is fit on the nearest CF regardless of K, so slot j's
         # prediction does not depend on K at all: mean(slots 0..4) IS the K=5
         # answer, exactly. c2_derive_k.py does that averaging.
-        slot_probs = {"cf_anchor": anchor_slots}
+        slot_probs = {} if anchor_slots is None else {"cf_anchor": anchor_slots}
 
         for cfg in configs_wanted:
             if not config_available(cfg, cols):
@@ -437,6 +477,95 @@ def run(args):
     print(f"\n  wrote {summary_path}")
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# EMBEDDINGS FOR A LEARNED K-AGGREGATOR
+# ══════════════════════════════════════════════════════════════════════════════
+
+def run_embeddings(args):
+    """Save the MLP's per-pair representation for every (query, CF_k), val and test.
+
+    The counterpart of what c2_attention_val.ipynb does to the frozen K=1 CNN, so
+    the two ladders feed an aggregation head the same thing:
+
+      * the MLP is fit on train MINUS a patient-grouped val slice -- the same
+        GroupShuffleSplit(val_frac, seed) c2_train_images.py holds out, on the
+        same row order, so the val queries are identical to the CNN's
+      * val and test queries are scored against each of their K CFs; the head is
+        fit on val, which this MLP never saw, and evaluated on test
+
+    So this is NOT the ladder's MLP (that one is fit on all of train and never
+    saved). Its own mean-of-K-sigmoids is written alongside, as the reference the
+    head has to beat.
+
+    Writes <cf_K>/attributes_embeddings/MLP_<cfg>/fold_<i>_embeddings.npz with
+    {val,test}_{h (n,K,16), p (n,K), y, pid, path, c0_prob}.
+    """
+    src = cf_source_from_args(args)
+    configs = ([c.strip() for c in args.configs.split(",")] if args.configs else ["MCF5"])
+    no_cf = [c for c in configs if c not in CF_DEPENDENT]
+    if no_cf:
+        raise SystemExit(f"{no_cf} have no CF block: all K slots would be identical")
+
+    out_root = os.path.join(RESULTS_DIR, "C2_final_results", args.disease, src.name,
+                            f"cf_{args.cf_count}", "attributes_embeddings")
+    print(f"\n  MLP EMBEDDINGS: {args.disease} | {src.describe()} | K={args.cf_count}"
+          f" | {', '.join(configs)}\n  -> {out_root}")
+    summary = []
+
+    for fold in load_folds(args.disease, src, args.cf_count, n_folds=args.n_folds):
+        todo = [c for c in configs if args.overwrite or not os.path.exists(
+            os.path.join(out_root, f"MLP_{c}", f"fold_{fold.index}_embeddings.npz"))]
+        if not todo:
+            print(f"  fold {fold.index}: done -- skipping (--overwrite to redo)")
+            continue
+
+        train_df = fold.train
+        gss = GroupShuffleSplit(n_splits=1, test_size=args.val_frac, random_state=RANDOM_SEED)
+        fit_idx, val_idx = next(gss.split(train_df, groups=train_df["patient_id"]))
+        cols = feature_columns(train_df, args.disease)
+        K = fold.n_slots
+        sides = {"val":  [fold.train_slot(j, val_idx) for j in range(K)],
+                 "test": [fold.test_slot(j) for j in range(K)]}
+        for name, slots in sides.items():
+            for j, sl in enumerate(slots[1:], 1):
+                assert (sl["path"].values == slots[0]["path"].values).all(), \
+                    f"fold {fold.index} {name}: slot {j} has different query rows"
+        print(f"  fold {fold.index}: fit {len(fit_idx):,} | val {len(val_idx):,} "
+              f"| test {len(fold):,} x {K} CF")
+
+        for cfg in todo:
+            X_tr = config_matrix(train_df, cfg, cols, args.disease)
+            model, scaler = fit_model(X_tr[fit_idx], train_df["correct"].values[fit_idx], "MLP")
+            del X_tr
+            out = {}
+            for name, slots in sides.items():
+                hp = [mlp_forward(model, scaler, config_matrix(sl, cfg, cols, args.disease))
+                      for sl in slots]
+                s0 = slots[0]
+                out.update({f"{name}_h": np.stack([h for h, _ in hp], 1).astype(np.float32),
+                            f"{name}_p": np.stack([p for _, p in hp], 1),
+                            f"{name}_y": s0["correct"].values.astype(np.int8),
+                            f"{name}_pid": s0["patient_id"].values.astype(str),
+                            f"{name}_path": s0["path"].values.astype(str),
+                            f"{name}_c0_prob": s0[f"{args.disease}_prob"].values})
+            d = os.path.join(out_root, f"MLP_{cfg}")
+            os.makedirs(d, exist_ok=True)
+            np.savez_compressed(os.path.join(d, f"fold_{fold.index}_embeddings.npz"), **out)
+            auc = float(roc_auc_score(out["test_y"], out["test_p"].mean(1)))
+            summary.append({"config": cfg, "fold": fold.index, "mean_sigmoid": auc,
+                            "slot0_only": float(roc_auc_score(out["test_y"], out["test_p"][:, 0])),
+                            "n_val": len(val_idx), "n_test": len(fold)})
+            print(f"    MLP {cfg:<5} h={out['test_h'].shape}  mean-of-K AUC = {auc:.4f}")
+
+    # merged with what earlier (partial) runs wrote, so a resumed run keeps every fold
+    for cfg, g in (pd.DataFrame(summary).groupby("config") if summary else []):
+        path = os.path.join(out_root, f"MLP_{cfg}", "fold_aucs.csv")
+        if os.path.exists(path):
+            old = pd.read_csv(path)
+            g = pd.concat([old[~old["fold"].isin(g["fold"])], g])
+        g.sort_values("fold").to_csv(path, index=False)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -445,10 +574,17 @@ def main():
                     help=f"comma-separated subset; default all ({','.join(CONFIGS)})")
     ap.add_argument("--models", default=",".join(MODEL_TYPES))
     ap.add_argument("--save-models", action="store_true")
+    ap.add_argument("--save-embeddings", action="store_true",
+                    help="instead of the ladder: refit the MLP on train minus a patient-"
+                         "grouped val slice and save its per-pair hidden layer for val and "
+                         "test (see run_embeddings). --configs defaults to MCF5 here")
+    ap.add_argument("--val-frac", type=float, default=0.15,
+                    help="--save-embeddings only; must match c2_train_images.py")
     ap.add_argument("--overwrite", action="store_true",
                     help="recompute even if cv_summary.csv already exists")
     add_cf_args(ap)
-    run(ap.parse_args())
+    args = ap.parse_args()
+    run_embeddings(args) if args.save_embeddings else run(args)
 
 
 if __name__ == "__main__":

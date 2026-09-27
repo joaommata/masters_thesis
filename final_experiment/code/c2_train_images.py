@@ -91,7 +91,9 @@ DATA_ROOT = os.environ.get("THESIS_DATA", "/work3/s251710/thesis_data")
 
 # Grad-CAM split directories written by c0_final_predictions.py. The old
 # single-label C0 used val/ and train/; this model uses the split names.
-CAM_SPLITS = ("C2_dataset", "Original_Test")
+# CF_levels holds the Grad-CAMs of the GENERATED counterfactuals and is searched
+# last, so a query image still resolves on the first os.path.exists.
+CAM_SPLITS = ("C2_dataset", "Original_Test", "CF_levels")
 
 MODEL_KEYS = ["xi", "xi_sal", "cf", "cf_sal", "dual", "dual_sal", "dual_sal_scalars"]
 

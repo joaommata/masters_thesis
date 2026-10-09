@@ -1,63 +1,57 @@
 # c2_train_attributes.py
 """
-Stage 5b: attribute-based C2 models on the cached folds.
+Stage 5b: attribute-based C2 models on the cached folds -- the block ablation.
 
-Trains the full config ladder with LR / RF / MLP on identical folds, so every
-model has its own baseline measured on exactly the same rows.
+Every feature belongs to one of three blocks (the design of c2_block_ablation.ipynb):
 
-    B1    prob                         C0 confidence alone -- the baseline to beat
-    B1.2  H(prob)                      binary entropy of the same number
-    B2    attrs                        image attributes, no C0 signal
-    B3    emb                          C0 embedding
-    B4    prob + attrs
-    B5    prob + emb
-    M1    delta                        query-minus-CF attribute deltas alone
-    M2    prob + delta
-    M3    prob + delta + attrs
-    M4    prob + delta + emb
-    M5    prob + delta + attrs + emb
-    M6    prob + delta + attrs + cf_prob
-    MCF1  prob + cf_prob
-    MCF2  prob + cf_prob + attrs + cf_attrs
-    MCF3  MCF2 + delta
-    MCF4  MCF3 + emb + cf_emb
-    MCF5  MCF4 + delta_emb
+    I   Input   attrs of x, C0 emb of x
+    C   CF      attrs of the CF, C0 emb of the CF
+    D   Delta   scaled attrs(x) - scaled attrs(CF), emb(x) - emb(CF)
+
+and the configs are combinations of blocks:
+
+    I       query only -- no counterfactual, K-invariant
+    C       counterfactual only
+    D       difference only
+    I+C
+    I+C+D
+
+Probability-free: C0's prob(x), prob(CF) and their difference are in NO config, so
+what is measured is what the attributes and embeddings carry on their own. MSP is
+the baseline, and it is scored downstream (c2_msp.py), not here.
+
+With probability (--with-prob): the final-system stage, run after the ablation has
+picked its winner. A fourth block
+
+    P   Prob    [p_xi, H(p_xi), p_cf, H(p_cf), p_xi - p_cf]
+
+-- exactly the five C0 scalars dual_sal_scalars gets in c2_train_images.py, per CF
+slot -- is appended to the winning config, giving I+C+D+P. It writes to
+.../cf_<K>/attributes_prob, never to .../attributes, so the probability-free
+ablation and everything that reads it are untouched.
+
+    python c2_train_attributes.py --disease effusion --cf-source knn --cf-count 10 --with-prob
+
+One model: a torch MLP, 64-32-16 ReLU, Adam 1e-3, L2 1e-4, batch 200,
+class-balanced BCE (pos_weight = n_neg / n_pos), early stopping on the AUC of a
+patient-grouped 10% val slice of train (patience 10, max 500 epochs). Runs on the
+GPU when there is one.
 
 USAGE:
 
-    python c2_train_attributes.py --disease effusion --cf-source knn --cf-count 1
-
-Folds come from c2_folds.py and are built on first use if absent. Nothing here
-recomputes the CF pairing.
+    python c2_train_attributes.py --disease effusion --cf-source knn --cf-count 10
 
 More than one counterfactual per query
 --------------------------------------
-K is combined by ENSEMBLING SCORES, never by averaging features -- the same
-protocol the CNN ladder uses, so the two are comparable at every K:
+Train on the NEAREST counterfactual only (slot 0), predict each of the K test
+slots, average the K probabilities. Slot j's score does not depend on K, so one
+K=10 run also holds K=5 and K=1 exactly: c2_derive_k.py averages a prefix of the
+per-slot probabilities written to fold_<i>_slot_probs.npz. `I` has no CF block and
+is scored once (k_used=1).
 
-    train   each query is paired with its NEAREST counterfactual only. One row
-            per query, one model fit. Training cost is flat in K.
-    test    the fitted model is applied K times, once per (query, CF_j) pair,
-            and the K predicted probabilities are averaged into one score per
-            query. K predictions in, one AUC out, on the same query rows.
-
-Feature-space averaging was the earlier design and it is gone. Averaging K
-counterfactuals into one mean vector destroys what K is meant to add: a mean
-attribute vector over ten neighbours is a smoother, more central point than any
-real counterfactual, so delta_* shrinks toward the pool mean as K grows and the
-model sees less disagreement rather than more. Ensembling keeps every pair intact
-and combines ten opinions instead of ten inputs.
-
-The feature space is therefore identical at every K -- one CF per row, always --
-and no config changes width. What changes is how many predictions get averaged.
-
-Configs with no CF block (B1-B5) score identically on every slot, so they are
-evaluated once and reported with k_used=1 in cv_summary.csv. That is a claim, not
-a shortcut: the baselines are K-invariant, which is what lets a difference across
-K be read as coming from the counterfactual side alone.
-
-Results land in .../<source>/cf_<K>/attributes, so different K never overwrite
-each other.
+Results land in .../<source>/cf_<K>/attributes, in the same layout the ensemble,
+derive and bootstrap code read. The B/M/MCF ladder this replaced is in
+archive/c2_train_attributes_ladder.py.
 """
 import argparse
 import json
@@ -65,66 +59,36 @@ import os
 import sys
 import time
 
-import joblib
 import numpy as np
 import pandas as pd
+import torch
+import torch.nn as nn
 from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.neural_network import MLPClassifier
 from sklearn.model_selection import GroupShuffleSplit
-from sklearn.metrics import roc_auc_score, roc_curve
-from scipy.special import expit
+from sklearn.metrics import roc_auc_score
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from c2_folds import (                                          # noqa: E402
-    RESULTS_DIR, RANDOM_SEED, N_FOLDS,
-    load_folds, add_cf_args, cf_source_from_args, fold_dir,
+    RESULTS_DIR, RANDOM_SEED, load_folds, add_cf_args, cf_source_from_args, fold_dir,
 )
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, os.path.join(REPO, "code", "c2"))
 from c2_feature_spec import C0_DERIVED_COLS, RSNA_META_COLS     # noqa: E402
 
-CONFIGS = ["B1", "B1.2", "B2", "B3", "B4", "B5",
-           "M1", "M2", "M3", "M4", "M5", "M6",
-           "MCF1", "MCF2", "MCF3", "MCF4", "MCF5"]
-MODEL_TYPES = ["LR", "RF", "MLP"]
+CONFIGS = ["I", "C", "D", "I+C", "I+C+D"]
+# --with-prob configs: the ablation winner plus the C0 scalars. Kept out of CONFIGS so
+# the probability-free ablation can never pick one up by default.
+PROB_CONFIGS = ["I+C+D+P"]
+MODEL = "MLP"
+# Configs whose values depend on WHICH counterfactual the query was paired with.
+CF_DEPENDENT = {c for c in CONFIGS + PROB_CONFIGS if c != "I"}
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # FEATURE BLOCKS
 # ══════════════════════════════════════════════════════════════════════════════
-# A config is a list of blocks, concatenated in the order written here. Spelling
-# it out (rather than hstack-ing inline) buys two things: the column order of
-# every config is one readable line, and CF_DEPENDENT below falls out of the
-# definitions instead of being a second list that can drift from them.
-
-CONFIG_BLOCKS = {
-    "B1":   ("prob",),
-    "B1.2": ("ent",),
-    "B2":   ("attr",),
-    "B3":   ("emb",),
-    "B4":   ("prob", "attr"),
-    "B5":   ("prob", "emb"),
-    "M1":   ("delta",),
-    "M2":   ("prob", "delta"),
-    "M3":   ("prob", "delta", "attr"),
-    "M4":   ("prob", "delta", "emb"),
-    "M5":   ("prob", "delta", "attr", "emb"),
-    "M6":   ("prob", "delta", "attr", "cf_prob"),
-    "MCF1": ("prob", "cf_prob"),
-    "MCF2": ("prob", "cf_prob", "attr", "cf_attr"),
-    "MCF3": ("prob", "cf_prob", "attr", "cf_attr", "delta"),
-    "MCF4": ("prob", "cf_prob", "attr", "cf_attr", "delta", "emb", "cf_emb"),
-    "MCF5": ("prob", "cf_prob", "attr", "cf_attr", "delta", "emb", "cf_emb",
-             "delta_emb"),
-}
-
-# Blocks whose values depend on WHICH counterfactual the query was paired with.
-CF_BLOCKS = {"delta", "cf_attr", "cf_emb", "cf_prob", "delta_emb"}
-CF_DEPENDENT = {c for c, b in CONFIG_BLOCKS.items() if CF_BLOCKS & set(b)}
-
 
 def feature_columns(df, disease):
     """The column list behind each block, derived once per fold from the train frame.
@@ -165,133 +129,111 @@ def feature_columns(df, disease):
             f"non-numeric columns reached the attribute space: {non_numeric[:5]}\n"
             f"They must be added to meta_cols -- a string column crashes "
             f"StandardScaler the way cam_path did.")
+    # Not a feature list: the query-probability column the P block reads.
+    cols["prob"] = f"{disease}_prob"
     return cols
 
 
 def _entropy(p):
-    p = np.clip(p, 1e-10, 1 - 1e-10)
-    return (-p * np.log(p) - (1 - p) * np.log(1 - p)).reshape(-1, 1)
+    """Binary entropy, clipped as in c2_train_images._entropy."""
+    p = np.clip(p, 1e-7, 1.0 - 1e-7)
+    return -(p * np.log(p) + (1.0 - p) * np.log(1.0 - p))
 
 
-def block_matrix(df, block, cols, disease):
-    """One feature block as a float64 matrix."""
-    if block == "prob":
-        return df[[f"{disease}_prob"]].values.astype(np.float64)
-    if block == "ent":
-        return _entropy(df[f"{disease}_prob"].values.astype(np.float64))
-    if block == "cf_prob":
-        return df[["cf_prob"]].values.astype(np.float64)
-    if block == "delta_emb":
-        # derived, not stored: emb and cf_emb are aligned by construction
-        return (df[cols["emb"]].values.astype(np.float64)
-                - df[cols["cf_emb"]].values.astype(np.float64))
-    return df[cols[block]].values.astype(np.float64)
+def block(df, cols, b):
+    """The features of one block. Only P carries C0's probability."""
+    if b == "P":
+        # Same five scalars, same order, as c2_train_images._make_scalars. A slot
+        # frame holds ONE counterfactual, so cf_prob is that CF's own probability.
+        p_xi = df[cols["prob"]].values.astype(np.float64)
+        p_cf = df["cf_prob"].values.astype(np.float64)
+        return [np.stack([p_xi, _entropy(p_xi), p_cf, _entropy(p_cf), p_xi - p_cf],
+                         axis=1)]
+    if b == "I":
+        return [df[cols["attr"]].values, df[cols["emb"]].values]
+    if b == "C":
+        return [df[cols["cf_attr"]].values, df[cols["cf_emb"]].values]
+    if b == "D":
+        return [df[cols["delta"]].values,
+                df[cols["emb"]].values - df[cols["cf_emb"]].values]
+    raise ValueError(f"unknown block {b!r}")
 
 
-def config_matrix(df, cfg, cols, disease):
-    """The design matrix for one config, built one config at a time.
-
-    Building all seventeen at once for both sides of a fold is ~18 GB, and with
-    K test slots it would be ~18 GB plus K times the test half. One at a time
-    keeps the peak at the widest single config (MCF5, ~4,460 columns).
-    """
-    blocks = [block_matrix(df, b, cols, disease) for b in CONFIG_BLOCKS[cfg]]
-    return np.hstack(blocks) if len(blocks) > 1 else blocks[0]
-
-
-def config_available(cfg, cols):
-    """MCF* need the CF's own attributes and embeddings to exist."""
-    need = set(CONFIG_BLOCKS[cfg])
-    if "cf_attr" in need and not cols["cf_attr"]:
-        return False
-    if ("cf_emb" in need or "delta_emb" in need) and not cols["cf_emb"]:
-        return False
-    return True
+def config_matrix(df, cols, config):
+    """The design matrix of one config, e.g. "I+C" -> [attr, emb, cf_attr, cf_emb]."""
+    return np.hstack([f for b in config.split("+") for f in block(df, cols, b)]
+                     ).astype(np.float32)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MODELS
+# MODEL
 # ══════════════════════════════════════════════════════════════════════════════
 
-def fit_model(X_train, y_train, model_type="LR"):
-    """Fit one model. Returns (model, scaler); scaler is None for RF."""
-    if model_type == "LR":
-        scaler = StandardScaler()
-        model = LogisticRegression(max_iter=5000, class_weight="balanced",
-                                   random_state=RANDOM_SEED)
-        model.fit(scaler.fit_transform(X_train), y_train)
-        return model, scaler
-
-    if model_type == "RF":
-        model = RandomForestClassifier(n_estimators=200, class_weight="balanced",
-                                       random_state=RANDOM_SEED, n_jobs=-1)
-        model.fit(X_train, y_train)
-        return model, None
-
-    if model_type == "MLP":
-        scaler = StandardScaler()
-        model = MLPClassifier(hidden_layer_sizes=(64, 32, 16), max_iter=500,
-                              early_stopping=True, validation_fraction=0.05,
-                              random_state=RANDOM_SEED)
-        model.fit(scaler.fit_transform(X_train.astype(np.float32)), y_train)
-        return model, scaler
-
-    raise ValueError(f"unknown model type: {model_type}")
+def fit_predict(X_tr, y_tr, groups, X_tests, epochs=500, patience=10, bs=200,
+                seed=RANDOM_SEED):
+    """Fit the MLP on X_tr and return P(correct) for each matrix in X_tests."""
+    net, scaler = fit(X_tr, y_tr, groups, epochs, patience, bs, seed)
+    to_t = lambda a: torch.tensor(a, dtype=torch.float32, device=DEVICE)
+    with torch.no_grad():
+        return [torch.sigmoid(net(to_t(scaler.transform(Xt))).squeeze(1))
+                .cpu().numpy().astype(np.float64) for Xt in X_tests]
 
 
-def predict_model(model, scaler, X, model_type):
-    if scaler is None:
-        return model.predict_proba(X)[:, 1]
-    if model_type == "MLP":
-        X = X.astype(np.float32)
-    return model.predict_proba(scaler.transform(X))[:, 1]
+def fit(X_tr, y_tr, groups, epochs=500, patience=10, bs=200, seed=RANDOM_SEED):
+    """Fit the MLP on X_tr; return the best net (eval mode) and its input scaler.
 
-
-def mlp_forward(model, scaler, X):
-    """(last hidden layer (n, 16), P(correct) (n,)) of a fitted MLPClassifier.
-
-    sklearn has no forward hooks, so the hidden layers are replayed from the
-    stored weights. The output is recomputed from that same hidden layer and
-    checked against predict_proba, so the embedding is provably the one the
-    model's own prediction was read from.
+    The val split is 10% of the training rows, grouped by patient, so no patient
+    is on both sides of it.
     """
-    if model.activation != "relu":
-        raise ValueError(f"mlp_forward replays ReLU layers, model uses {model.activation}")
-    a = scaler.transform(X.astype(np.float32))
-    for W, b in zip(model.coefs_[:-1], model.intercepts_[:-1]):
-        a = np.maximum(a @ W + b, 0)
-    p = expit((a @ model.coefs_[-1] + model.intercepts_[-1]).ravel())   # overflow-safe sigmoid, as sklearn
-    np.testing.assert_allclose(p, predict_model(model, scaler, X, "MLP"), atol=1e-4)
-    return a, p
+    torch.manual_seed(seed)
+    scaler = StandardScaler().fit(X_tr)
+    to_t = lambda a: torch.tensor(a, dtype=torch.float32, device=DEVICE)
+    X, y = to_t(scaler.transform(X_tr)), to_t(y_tr)
+    fit, val = next(GroupShuffleSplit(n_splits=1, test_size=0.1, random_state=seed)
+                    .split(X_tr, y_tr, groups))
+    y_val = y_tr[val]
+    fit, val = torch.tensor(fit, device=DEVICE), torch.tensor(val, device=DEVICE)
+
+    net = nn.Sequential(nn.Linear(X.shape[1], 64), nn.ReLU(), nn.Linear(64, 32), nn.ReLU(),
+                        nn.Linear(32, 16), nn.ReLU(), nn.Linear(16, 1)).to(DEVICE)
+    opt = torch.optim.Adam(net.parameters(), lr=1e-3, weight_decay=1e-4)
+    pos_weight = torch.tensor((y_tr == 0).sum() / (y_tr == 1).sum(),
+                              dtype=torch.float32, device=DEVICE)
+    loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+
+    best, best_state, wait = -1, None, 0
+    for _ in range(epochs):
+        net.train()
+        for idx in fit[torch.randperm(len(fit), device=DEVICE)].split(bs):
+            opt.zero_grad()
+            loss_fn(net(X[idx]).squeeze(1), y[idx]).backward()
+            opt.step()
+        net.eval()
+        with torch.no_grad():
+            score = roc_auc_score(y_val, net(X[val]).squeeze(1).cpu().numpy())
+        if score > best + 1e-4:
+            best, wait = score, 0
+            best_state = {k: v.clone() for k, v in net.state_dict().items()}
+        else:
+            wait += 1
+            if wait >= patience:
+                break
+    net.load_state_dict(best_state)
+    net.eval()
+    return net, scaler
 
 
 def score_cf_anchor(train_df, test_slots):
     """Baseline: score a (query, CF) pair by the mean correctness of training rows
     that retrieved the same counterfactual. Returns the per-slot matrix, or None
-    if the counterfactuals are not shared between queries.
-
-    Measures how much of the signal is carried by WHICH CF was picked, before any
-    feature is looked at. Returned per slot, and averaged by the caller, so it is
-    ensembled exactly like every model above and stays comparable as K moves
-    rather than quietly changing definition.
-
-    It is only defined for a RETRIEVAL source. A generated counterfactual is
-    produced from its own query and belongs to no other, so every anchor group
-    has size one, no test CF is ever in the train dict, every score falls back to
-    0.0 and roc_auc_score returns exactly 0.5 -- for every fold, silently, and
-    looking for all the world like a measured null result. Detected here and
-    reported as unavailable instead.
+    if the counterfactuals are not shared between queries (a generated source:
+    every anchor group would have size one and the AUC would be a silent 0.5).
     """
     anchor = {}
     for a, corr in zip(train_df["cf_paths"], train_df["correct"]):
         anchor.setdefault(str(a), []).append(corr)
-
-    # A retrieval source reuses popular counterfactuals heavily; a generative one
-    # never reuses any. The gap is not marginal, so a simple threshold separates
-    # them without needing to ask the source what kind it is.
     if len(anchor) == len(train_df) and len(train_df) > 1:
         return None
-
     anchor = {a: float(np.mean(v)) for a, v in anchor.items()}
     return np.stack([np.array([anchor.get(str(a), 0.0) for a in slot["cf_paths"]])
                      for slot in test_slots])
@@ -303,23 +245,19 @@ def score_cf_anchor(train_df, test_slots):
 
 def run(args):
     src = cf_source_from_args(args)
-    configs_wanted = ([c.strip() for c in args.configs.split(",")]
-                      if args.configs else CONFIGS)
-    unknown = [c for c in configs_wanted if c not in CONFIG_BLOCKS]
+    allowed = PROB_CONFIGS if args.with_prob else CONFIGS
+    configs = [c.strip() for c in args.configs.split(",")] if args.configs else allowed
+    unknown = [c for c in configs if c not in allowed]
     if unknown:
-        raise SystemExit(f"unknown configs {unknown}; expected {CONFIGS}")
-    models_wanted = [m.strip() for m in args.models.split(",")]
+        raise SystemExit(f"unknown configs {unknown}; expected {allowed}"
+                         f"{'' if args.with_prob else ' (P configs need --with-prob)'}")
 
     out_dir = os.path.join(RESULTS_DIR, "C2_final_results", args.disease,
-                           src.name, f"cf_{args.cf_count}", "attributes")
+                           src.name, f"cf_{args.cf_count}",
+                           "attributes_prob" if args.with_prob else "attributes")
     os.makedirs(out_dir, exist_ok=True)
-
-    # A finished run is ~4.75h and is deterministic (seed 42), so repeating it
-    # only overwrites identical numbers. Guard it: a resubmitted chain, or a
-    # job whose disease was misrouted, must not silently redo hours of work.
     if os.path.exists(os.path.join(out_dir, "cv_summary.csv")) and not args.overwrite:
-        print(f"  cv_summary.csv already present in {out_dir}"
-              f"  (--overwrite to rebuild)")
+        print(f"  cv_summary.csv already present in {out_dir}  (--overwrite to rebuild)")
         return
 
     print(f"\n{'='*72}")
@@ -327,104 +265,63 @@ def run(args):
     print(f"{'='*72}")
     print(f"  folds:   {fold_dir(args.disease, src.name, args.cf_count)}")
     print(f"  results: {out_dir}")
-    print(f"  configs: {', '.join(configs_wanted)}")
-    print(f"  models:  {', '.join(models_wanted)}")
-    print(f"  K combination: train on the nearest CF, average the K test "
-          f"probabilities")
+    print(f"  configs: {', '.join(configs)}  "
+          f"({'with C0 scalars' if args.with_prob else 'no prob'})   device: {DEVICE}")
 
-    results = {m: {c: [] for c in configs_wanted} for m in models_wanted}
+    results = {c: [] for c in configs}
     results["cf_anchor"] = []
     dims_seen = {}
 
     for fold in load_folds(args.disease, src, args.cf_count, n_folds=args.n_folds):
         train_df = fold.train
-        n_slots = fold.n_slots
         print(f"\n{'-'*72}\n  FOLD {fold.index + 1}/{args.n_folds}"
-              f"  (train {len(train_df):,} | test {len(fold):,} x {n_slots} CF)"
+              f"  (train {len(train_df):,} | test {len(fold):,} x {fold.n_slots} CF)"
               f"\n{'-'*72}")
 
         y_train = train_df["correct"].values
+        groups = train_df["patient_id"].values
         cols = feature_columns(train_df, args.disease)
-        print(f"  feature groups: attrs={len(cols['attr'])} "
-              f"delta={len(cols['delta'])} emb={len(cols['emb'])} "
-              f"cf_attr={len(cols['cf_attr'])} cf_emb={len(cols['cf_emb'])}")
+        print(f"  feature groups: attrs={len(cols['attr'])} delta={len(cols['delta'])} "
+              f"emb={len(cols['emb'])} cf_attr={len(cols['cf_attr'])} "
+              f"cf_emb={len(cols['cf_emb'])}")
 
-        # Build every test slot up front: each is revisited once per (config,
-        # model), and rebuilding one costs ~15s against ~0.5 GB to keep it.
-        slots = [fold.test_slot(j) for j in range(n_slots)]
+        slots = [fold.test_slot(j) for j in range(fold.n_slots)]
         y_test = slots[0]["correct"].values
         for j, sl in enumerate(slots[1:], 1):
             assert (sl["path"].values == slots[0]["path"].values).all(), (
-                f"fold {fold.index}: slot {j} has different query rows than slot 0 "
-                f"-- the K predictions being averaged would not belong to the "
-                f"same queries")
+                f"fold {fold.index}: slot {j} has different query rows than slot 0")
+
+        pred_df = slots[0][["path", "patient_id", f"{args.disease}_prob", "correct"]].copy()
+        pred_df["cf_paths"] = fold.test_cf_paths
+        pred_df["cf_prob"] = np.mean([sl["cf_prob"].values for sl in slots], axis=0)
 
         anchor_slots = score_cf_anchor(train_df, slots)
-        if anchor_slots is None:
-            print("  CF-anchor baseline: N/A -- every counterfactual is unique to "
-                  "its query, so there is no anchor to score")
-        else:
+        slot_probs = {}
+        if anchor_slots is not None:
             anchor_auc = float(roc_auc_score(y_test, anchor_slots.mean(axis=0)))
             results["cf_anchor"].append(anchor_auc)
+            pred_df["cf_anchor_prob"] = anchor_slots.mean(axis=0)
+            slot_probs["cf_anchor"] = anchor_slots
             print(f"  CF-anchor baseline AUC: {anchor_auc:.4f}")
 
-        pred_df = slots[0][["path", "patient_id", f"{args.disease}_prob",
-                            "correct"]].copy()
-        pred_df["cf_paths"] = fold.test_cf_paths
-        pred_df["cf_prob"] = np.mean(
-            [sl["cf_prob"].values for sl in slots], axis=0)
-        if anchor_slots is not None:
-            pred_df["cf_anchor_prob"] = anchor_slots.mean(axis=0)
-
-        # Per-slot probabilities, kept so a smaller K can be read off this run.
-        # The model is fit on the nearest CF regardless of K, so slot j's
-        # prediction does not depend on K at all: mean(slots 0..4) IS the K=5
-        # answer, exactly. c2_derive_k.py does that averaging.
-        slot_probs = {} if anchor_slots is None else {"cf_anchor": anchor_slots}
-
-        for cfg in configs_wanted:
-            if not config_available(cfg, cols):
-                print(f"  {cfg}: unavailable for this fold set (needs "
-                      f"cf_attr/cf_emb) -- skipped")
-                continue
-
-            X_tr = config_matrix(train_df, cfg, cols, args.disease)
+        for cfg in configs:
+            t0 = time.time()
+            X_tr = config_matrix(train_df, cols, cfg)
             dims_seen.setdefault(cfg, int(X_tr.shape[1]))
-
-            # A config with no CF block scores the same on every slot, so it is
-            # evaluated once. That is not an optimisation only: it states that
-            # the baselines are K-invariant, which is what lets a K sweep be read
-            # as a change in the counterfactual side alone.
-            use_slots = slots if cfg in CF_DEPENDENT else slots[:1]
-            X_te = [config_matrix(sl, cfg, cols, args.disease) for sl in use_slots]
-
-            for mt in models_wanted:
-                t0 = time.time()
-                model, scaler = fit_model(X_tr, y_train, model_type=mt)
-                per_slot = np.stack(
-                    [predict_model(model, scaler, X, mt) for X in X_te])
-                # float64 on purpose. RF probabilities are multiples of 1/200
-                # and full of exact ties; storing them as float32 reorders those
-                # ties and moves the derived AUC in the fourth decimal, which
-                # would make a derived K merely close to a computed one instead
-                # of equal to it.
-                slot_probs[f"{mt}_{cfg}"] = per_slot
-                y_prob = per_slot.mean(axis=0)
-                auc = float(roc_auc_score(y_test, y_prob))
-                results[mt][cfg].append(auc)
-                pred_df[f"{mt}_{cfg}_prob"] = y_prob
-                print(f"  {mt:<4} {cfg:<5} dim={X_tr.shape[1]:<5} "
-                      f"x{len(X_te)} CF   AUC = {auc:.4f}   "
-                      f"[{time.time()-t0:.0f}s]")
-
-                if args.save_models:
-                    md = os.path.join(out_dir, "models")
-                    os.makedirs(md, exist_ok=True)
-                    payload = ({"model": model, "scaler": scaler}
-                               if scaler is not None else model)
-                    joblib.dump(payload,
-                                os.path.join(md, f"{mt}_{cfg}_fold{fold.index}.pkl"))
-            del X_tr, X_te
+            # A config with no CF block scores the same on every slot: evaluate once.
+            use = slots if cfg in CF_DEPENDENT else slots[:1]
+            per_slot = np.stack(fit_predict(X_tr, y_train, groups,
+                                            [config_matrix(sl, cols, cfg) for sl in use]))
+            if DEVICE != "cpu":
+                torch.cuda.empty_cache()
+            slot_probs[f"{MODEL}_{cfg}"] = per_slot
+            y_prob = per_slot.mean(axis=0)
+            auc = float(roc_auc_score(y_test, y_prob))
+            results[cfg].append(auc)
+            pred_df[f"{MODEL}_{cfg}_prob"] = y_prob
+            print(f"  {MODEL} {cfg:<6} dim={X_tr.shape[1]:<5} x{len(use)} CF   "
+                  f"AUC = {auc:.4f}   [{time.time()-t0:.0f}s]", flush=True)
+            del X_tr
 
         # Written per fold: a wall-clock kill after fold 3 still leaves 3 usable folds.
         pred_df.to_csv(os.path.join(out_dir, f"fold_{fold.index}_predictions.csv"),
@@ -438,23 +335,17 @@ def run(args):
             **slot_probs)
 
     # ── summary ───────────────────────────────────────────────────────────────
-    rows = []
-    for mt in models_wanted:
-        for cfg in configs_wanted:
-            aucs = results[mt][cfg]
-            if aucs:
-                rows.append({"model": mt, "config": cfg, "n_folds": len(aucs),
-                             "k_used": args.cf_count if cfg in CF_DEPENDENT else 1,
-                             "auc_mean": float(np.mean(aucs)),
-                             "auc_std": float(np.std(aucs)),
-                             "auc_folds": ";".join(f"{a:.4f}" for a in aucs)})
+    rows = [{"model": MODEL, "config": cfg, "n_folds": len(a),
+             "k_used": args.cf_count if cfg in CF_DEPENDENT else 1,
+             "auc_mean": float(np.mean(a)), "auc_std": float(np.std(a)),
+             "auc_folds": ";".join(f"{x:.4f}" for x in a)}
+            for cfg, a in results.items() if cfg != "cf_anchor" and a]
     if results["cf_anchor"]:
-        rows.append({"model": "baseline", "config": "cf_anchor",
-                     "n_folds": len(results["cf_anchor"]),
+        a = results["cf_anchor"]
+        rows.append({"model": "baseline", "config": "cf_anchor", "n_folds": len(a),
                      "k_used": args.cf_count,
-                     "auc_mean": float(np.mean(results["cf_anchor"])),
-                     "auc_std": float(np.std(results["cf_anchor"])),
-                     "auc_folds": ";".join(f"{a:.4f}" for a in results["cf_anchor"])})
+                     "auc_mean": float(np.mean(a)), "auc_std": float(np.std(a)),
+                     "auc_folds": ";".join(f"{x:.4f}" for x in a)})
 
     summary = pd.DataFrame(rows).sort_values("auc_mean", ascending=False)
     summary_path = os.path.join(out_dir, "cv_summary.csv")
@@ -466,104 +357,17 @@ def run(args):
                    "cf_count": args.cf_count, "train_k": 1,
                    "k_combination": "mean of the K predicted probabilities",
                    "n_folds": args.n_folds,
-                   "configs": configs_wanted, "models": models_wanted,
+                   "design": ("ablation winner + C0 scalars [p_xi, H(p_xi), p_cf, "
+                              "H(p_cf), p_xi - p_cf]" if args.with_prob
+                              else "block ablation, no prob"),
+                   "configs": configs, "models": [MODEL],
                    "cf_dependent_configs": sorted(CF_DEPENDENT),
                    "seed": RANDOM_SEED, "feature_dims": dims_seen}, fh, indent=2)
 
     print(f"\n{'='*72}\n  SUMMARY\n{'='*72}")
     for _, r in summary.iterrows():
-        print(f"  {r['model']:<9} {r['config']:<9} "
-              f"{r['auc_mean']:.4f} ± {r['auc_std']:.4f}")
+        print(f"  {r['model']:<9} {r['config']:<9} {r['auc_mean']:.4f} ± {r['auc_std']:.4f}")
     print(f"\n  wrote {summary_path}")
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# EMBEDDINGS FOR A LEARNED K-AGGREGATOR
-# ══════════════════════════════════════════════════════════════════════════════
-
-def run_embeddings(args):
-    """Save the MLP's per-pair representation for every (query, CF_k), val and test.
-
-    The counterpart of what c2_attention_val.ipynb does to the frozen K=1 CNN, so
-    the two ladders feed an aggregation head the same thing:
-
-      * the MLP is fit on train MINUS a patient-grouped val slice -- the same
-        GroupShuffleSplit(val_frac, seed) c2_train_images.py holds out, on the
-        same row order, so the val queries are identical to the CNN's
-      * val and test queries are scored against each of their K CFs; the head is
-        fit on val, which this MLP never saw, and evaluated on test
-
-    So this is NOT the ladder's MLP (that one is fit on all of train and never
-    saved). Its own mean-of-K-sigmoids is written alongside, as the reference the
-    head has to beat.
-
-    Writes <cf_K>/attributes_embeddings/MLP_<cfg>/fold_<i>_embeddings.npz with
-    {val,test}_{h (n,K,16), p (n,K), y, pid, path, c0_prob}.
-    """
-    src = cf_source_from_args(args)
-    configs = ([c.strip() for c in args.configs.split(",")] if args.configs else ["MCF5"])
-    no_cf = [c for c in configs if c not in CF_DEPENDENT]
-    if no_cf:
-        raise SystemExit(f"{no_cf} have no CF block: all K slots would be identical")
-
-    out_root = os.path.join(RESULTS_DIR, "C2_final_results", args.disease, src.name,
-                            f"cf_{args.cf_count}", "attributes_embeddings")
-    print(f"\n  MLP EMBEDDINGS: {args.disease} | {src.describe()} | K={args.cf_count}"
-          f" | {', '.join(configs)}\n  -> {out_root}")
-    summary = []
-
-    for fold in load_folds(args.disease, src, args.cf_count, n_folds=args.n_folds):
-        todo = [c for c in configs if args.overwrite or not os.path.exists(
-            os.path.join(out_root, f"MLP_{c}", f"fold_{fold.index}_embeddings.npz"))]
-        if not todo:
-            print(f"  fold {fold.index}: done -- skipping (--overwrite to redo)")
-            continue
-
-        train_df = fold.train
-        gss = GroupShuffleSplit(n_splits=1, test_size=args.val_frac, random_state=RANDOM_SEED)
-        fit_idx, val_idx = next(gss.split(train_df, groups=train_df["patient_id"]))
-        cols = feature_columns(train_df, args.disease)
-        K = fold.n_slots
-        sides = {"val":  [fold.train_slot(j, val_idx) for j in range(K)],
-                 "test": [fold.test_slot(j) for j in range(K)]}
-        for name, slots in sides.items():
-            for j, sl in enumerate(slots[1:], 1):
-                assert (sl["path"].values == slots[0]["path"].values).all(), \
-                    f"fold {fold.index} {name}: slot {j} has different query rows"
-        print(f"  fold {fold.index}: fit {len(fit_idx):,} | val {len(val_idx):,} "
-              f"| test {len(fold):,} x {K} CF")
-
-        for cfg in todo:
-            X_tr = config_matrix(train_df, cfg, cols, args.disease)
-            model, scaler = fit_model(X_tr[fit_idx], train_df["correct"].values[fit_idx], "MLP")
-            del X_tr
-            out = {}
-            for name, slots in sides.items():
-                hp = [mlp_forward(model, scaler, config_matrix(sl, cfg, cols, args.disease))
-                      for sl in slots]
-                s0 = slots[0]
-                out.update({f"{name}_h": np.stack([h for h, _ in hp], 1).astype(np.float32),
-                            f"{name}_p": np.stack([p for _, p in hp], 1),
-                            f"{name}_y": s0["correct"].values.astype(np.int8),
-                            f"{name}_pid": s0["patient_id"].values.astype(str),
-                            f"{name}_path": s0["path"].values.astype(str),
-                            f"{name}_c0_prob": s0[f"{args.disease}_prob"].values})
-            d = os.path.join(out_root, f"MLP_{cfg}")
-            os.makedirs(d, exist_ok=True)
-            np.savez_compressed(os.path.join(d, f"fold_{fold.index}_embeddings.npz"), **out)
-            auc = float(roc_auc_score(out["test_y"], out["test_p"].mean(1)))
-            summary.append({"config": cfg, "fold": fold.index, "mean_sigmoid": auc,
-                            "slot0_only": float(roc_auc_score(out["test_y"], out["test_p"][:, 0])),
-                            "n_val": len(val_idx), "n_test": len(fold)})
-            print(f"    MLP {cfg:<5} h={out['test_h'].shape}  mean-of-K AUC = {auc:.4f}")
-
-    # merged with what earlier (partial) runs wrote, so a resumed run keeps every fold
-    for cfg, g in (pd.DataFrame(summary).groupby("config") if summary else []):
-        path = os.path.join(out_root, f"MLP_{cfg}", "fold_aucs.csv")
-        if os.path.exists(path):
-            old = pd.read_csv(path)
-            g = pd.concat([old[~old["fold"].isin(g["fold"])], g])
-        g.sort_values("fold").to_csv(path, index=False)
 
 
 def main():
@@ -572,19 +376,13 @@ def main():
     ap.add_argument("--disease", required=True)
     ap.add_argument("--configs", default="",
                     help=f"comma-separated subset; default all ({','.join(CONFIGS)})")
-    ap.add_argument("--models", default=",".join(MODEL_TYPES))
-    ap.add_argument("--save-models", action="store_true")
-    ap.add_argument("--save-embeddings", action="store_true",
-                    help="instead of the ladder: refit the MLP on train minus a patient-"
-                         "grouped val slice and save its per-pair hidden layer for val and "
-                         "test (see run_embeddings). --configs defaults to MCF5 here")
-    ap.add_argument("--val-frac", type=float, default=0.15,
-                    help="--save-embeddings only; must match c2_train_images.py")
     ap.add_argument("--overwrite", action="store_true",
                     help="recompute even if cv_summary.csv already exists")
+    ap.add_argument("--with-prob", action="store_true",
+                    help=f"train {','.join(PROB_CONFIGS)} (the C0 scalars of "
+                         f"dual_sal_scalars added) into attributes_prob/")
     add_cf_args(ap)
-    args = ap.parse_args()
-    run_embeddings(args) if args.save_embeddings else run(args)
+    run(ap.parse_args())
 
 
 if __name__ == "__main__":

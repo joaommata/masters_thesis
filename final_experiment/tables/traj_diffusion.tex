@@ -1,0 +1,20 @@
+\begin{table}[htbp]
+\centering
+\small
+\caption{AUROC for predicting C0 correctness with the trajectory models, using diffusion counterfactuals at $K=1$ on the 20{,}000-image subset. The models see neither the counterfactual image nor C0's probability on the query, only C0's probability along the denoising trajectory toward the counterfactual. MLP: one model per block of the 32 hand-made trajectory features (LEVEL: where the trajectory sits and whether it crosses C0's threshold; MONO: how steadily it moves; SHAPE: slope, curvature and cubic fit; DYN: path length, velocity and acceleration) and on all of them (ALL). Sequence models read the whole trajectory. Values are mean $\pm$ std over 5 CV folds; bold is the best model per disease.}
+\label{tab:traj_diffusion}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lccccc|cc}
+\toprule
+& \multicolumn{5}{c|}{MLP on trajectory features} & \multicolumn{2}{c}{Sequence models} \\
+\cmidrule(lr){2-6} \cmidrule(l){7-8}
+Disease & LEVEL & MONO & SHAPE & DYN & ALL & 1D CNN & BiGRU \\
+\midrule
+Atelectasis & $0.840 \pm 0.007$ & $0.843 \pm 0.009$ & $0.843 \pm 0.008$ & $0.843 \pm 0.009$ & $\mathbf{0.844} \pm 0.008$ & $0.841 \pm 0.009$ & $0.843 \pm 0.008$ \\
+Cardiomegaly & $0.892 \pm 0.006$ & $0.896 \pm 0.004$ & $0.893 \pm 0.005$ & $0.895 \pm 0.003$ & $0.897 \pm 0.003$ & $0.896 \pm 0.006$ & $\mathbf{0.897} \pm 0.005$ \\
+Consolidation & $0.937 \pm 0.004$ & $0.935 \pm 0.006$ & $0.937 \pm 0.006$ & $0.937 \pm 0.004$ & $0.937 \pm 0.004$ & $0.938 \pm 0.004$ & $\mathbf{0.939} \pm 0.004$ \\
+Edema & $0.792 \pm 0.010$ & $0.796 \pm 0.011$ & $0.789 \pm 0.011$ & $0.795 \pm 0.011$ & $0.798 \pm 0.011$ & $0.798 \pm 0.010$ & $\mathbf{0.799} \pm 0.010$ \\
+Effusion & $0.684 \pm 0.007$ & $0.686 \pm 0.004$ & $0.683 \pm 0.006$ & $0.687 \pm 0.006$ & $0.687 \pm 0.007$ & $0.687 \pm 0.009$ & $\mathbf{0.688} \pm 0.008$ \\
+\bottomrule
+\end{tabular}}
+\end{table}

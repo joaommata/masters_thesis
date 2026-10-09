@@ -3,8 +3,24 @@ c0_final_predictions.py
 =======================
 Inference + Grad-CAM + embeddings for the final_experiment C0.
 
+--arch picks the C0 (default densenet121, the main one); the other backbones are
+the architecture-generalisation C0s from c0_train_multilabel_final.py --arch.
+The model dir, preprocessing and feature layer all follow from it:
+
+    arch         model dir           emb (what the head sees)    Grad-CAM layer
+    densenet121  C0_final/           relu(features), pooled 1024  features (7x7)
+    resnet50     C0_final_resnet50/  layer4, pooled 2048          layer4 (7x7)
+    vit_b_16     C0_final_vit_b_16/  CLS token after encoder 768  last block's ln_1,
+                                                                  patch tokens (14x14
+                                                                  -> avg-pooled to 7x7)
+
+The ViT CAM layer follows pytorch-grad-cam's ViT recipe (input norm of the last
+block): after the final block the head reads only the CLS token, so gradients on
+the patch tokens there are zero. The 14x14 map is pooled to 7x7 so every C0
+writes the same CAM format.
+
 What it outputs, per split, under <model dir>/<disease>/:
-    <split>_c0_<disease>.csv   path, prob, true, cam_path, emb_0..emb_1023,
+    <split>_c0_<disease>.csv   path, prob, true, cam_path, emb_0..emb_<D-1>,
                                pred, correct, margin, label_raw, certain
     all_probs_<split>.csv      path + p_<label> for all 14
     gradcam/<split>/*.npz      cam_pos, cam_neg  two (7,7) float32 maps in [0,1]
@@ -50,12 +66,14 @@ import os
 import numpy as np
 import pandas as pd
 import torch
-import torch.nn as nn
+import torch.nn.functional as F
 from PIL import Image
 from sklearn.metrics import roc_auc_score, roc_curve
 from torch.utils.data import Dataset, DataLoader
-from torchvision import models, transforms
 from tqdm import tqdm
+
+# Same model + eval preprocessing the C0 was trained with.
+from c0_train_multilabel_final import build_model, build_transform, DEFAULT_RECIPE
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -81,6 +99,8 @@ REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--disease", type=str, required=True, choices=list(disease_col.keys()))
+parser.add_argument("--arch", default="densenet121", choices=list(DEFAULT_RECIPE),
+                    help="which C0; picks C0_final[_<arch>]/multilabel_<policy>")
 parser.add_argument("--splits", nargs="+", default=list(SPLIT_SPEC.keys()),
                     choices=list(SPLIT_SPEC.keys()))
 parser.add_argument("--threshold-split", default="C0_checkpoint_selection",
@@ -118,7 +138,8 @@ DATA_ROOT = os.environ.get("THESIS_DATA", "/work3/s251710/thesis_data")
 RESULTS_DIR = os.environ.get("THESIS_RESULTS", "/work3/s251710/thesis_results")
 DATA_DIR = DATA_ROOT
 SPLIT_DIR = os.path.join(REPO, "final_experiment")
-MODEL_DIR = os.path.join(RESULTS_DIR, "C0_final", f"multilabel_{args.policy}")
+C0_ROOT = "C0_final" if args.arch == "densenet121" else f"C0_final_{args.arch}"
+MODEL_DIR = os.path.join(RESULTS_DIR, C0_ROOT, f"multilabel_{args.policy}")
 OUTPUT_DIR = os.path.join(MODEL_DIR, DISEASE)
 MODEL_PATH = os.path.join(MODEL_DIR, "c0_best.pt")
 LABELS_PATH = os.path.join(MODEL_DIR, "labels.json")
@@ -139,6 +160,10 @@ with open(LABELS_PATH) as f:
     spec = json.load(f)
 LABELS = spec["labels"]
 TARGET_IDX = LABELS.index(TARGET_COL)
+# The DenseNet labels.json predates the arch/recipe keys.
+if spec.get("arch", "densenet121") != args.arch:
+    raise SystemExit(f"--arch {args.arch} but {LABELS_PATH} says {spec['arch']}")
+RECIPE = spec.get("recipe", "irvin")
 
 banner("CONFIG")
 print(f"Disease:        {DISEASE} (column: {TARGET_COL})")
@@ -147,6 +172,7 @@ print(f"Uncertainty:    U-Ignore (-1 rows -> true = NaN; excluded from AUC, thre
 print(f"Split dir:      {SPLIT_DIR}")
 print(f"Splits:         {', '.join(args.splits)}")
 print(f"Threshold from: {args.threshold_split} (Youden's J)")
+print(f"Arch / recipe:  {args.arch} / {RECIPE}")
 print(f"Model path:     {MODEL_PATH}")
 print(f"Output dir:     {OUTPUT_DIR}")
 print(f"Grad-CAM:       {'DISABLED' if args.no_cam else 'enabled'}")
@@ -188,23 +214,15 @@ class CheXpertDataset(Dataset):
         return img, float(self.target[idx]), float(self.raw[idx]), self.paths[idx]
 
 
-transform = transforms.Compose([
-    transforms.Resize((224, 224)),
-    transforms.ToTensor(),
-    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-])
+transform = build_transform(RECIPE, train=False)
 
 
 # ── Model ─────────────────────────────────────────────────────────────────────
 
 def load_model(path):
-    print(f"Building DenseNet121 with {len(LABELS)}-logit head...")
-    
-    # Loads the pretrained DenseNet121 and replaces the classifier with a new linear layer
-    model = models.densenet121()
-    
-    # This linear layer will output the number of logits equal to the number of labels
-    model.classifier = nn.Linear(model.classifier.in_features, len(LABELS))
+    print(f"Building {args.arch} with {len(LABELS)}-logit head...")
+    # ImageNet weights are overwritten by the checkpoint straight away.
+    model = build_model(args.arch, len(LABELS))
 
     print(f"Loading trained C0 weights from: {path}")
     
@@ -226,20 +244,48 @@ cache = {}
 # + the 1024--dim embedding, which is the spatial average of the feature maps (B,1024)) 
 # + the gradients of the target logit w.r.t. the activations (B,21024,7,7) into the cache.
 
-def hook_fn(module, inp, out):
-    # IMPORTANT: do NOT detach/clone `out` -- the raw tensor has to stay in the
-    # graph so register_hook below actually catches the gradient.
-    acts = out
-    cache["acts"] = torch.relu(acts).detach()
-    cache["emb"] = cache["acts"].mean(dim=(2, 3)).detach()
+def tokens_to_map(x):
+    """ViT tokens (B, 1+N, D) -> patch-token map (B, D, sqrt N, sqrt N), CLS dropped."""
+    x = x[:, 1:, :]
+    side = int(round(x.shape[1] ** 0.5))
+    return x.reshape(x.shape[0], side, side, x.shape[2]).permute(0, 3, 1, 2)
 
-    def save_grad(grad):
-        cache["grads"] = grad.detach()
 
-    # Under torch.no_grad() (the CAM-free splits) there is no graph to hook, and
-    # register_hook would raise. The old script hits exactly this with --no-cam.
-    if acts.requires_grad:
-        acts.register_hook(save_grad)
+def make_hook(act_fn, grad_fn, with_emb):
+    """Forward hook caching CAM activations (+ their gradient) and, for CNNs, the
+    embedding as the spatial mean of the activations."""
+    def hook_fn(module, inp, out):
+        # IMPORTANT: do NOT detach/clone `out` -- the raw tensor has to stay in the
+        # graph so register_hook below actually catches the gradient.
+        acts = out
+        cache["acts"] = act_fn(acts).detach()
+        if with_emb:
+            cache["emb"] = cache["acts"].mean(dim=(2, 3)).detach()
+
+        def save_grad(grad):
+            cache["grads"] = grad_fn(grad).detach()
+
+        # Under torch.no_grad() (the CAM-free splits) there is no graph to hook, and
+        # register_hook would raise. The old script hits exactly this with --no-cam.
+        if acts.requires_grad:
+            acts.register_hook(save_grad)
+    return hook_fn
+
+
+def attach_hooks(model):
+    ident = lambda t: t
+    if args.arch == "densenet121":
+        # features ends before the final ReLU the classifier applies.
+        model.features.register_forward_hook(make_hook(torch.relu, ident, True))
+    elif args.arch == "resnet50":
+        model.layer4.register_forward_hook(make_hook(ident, ident, True))
+    elif args.arch == "vit_b_16":
+        model.encoder.layers[-1].ln_1.register_forward_hook(
+            make_hook(tokens_to_map, tokens_to_map, False))
+
+        def emb_hook(module, inp, out):          # encoder output incl. final LN
+            cache["emb"] = out[:, 0].detach()    # the CLS token the head reads
+        model.encoder.register_forward_hook(emb_hook)
 
 
 # ── Inference ─────────────────────────────────────────────────────────────────
@@ -296,7 +342,9 @@ def run_inference(model, loader, cam_dir, split, write_cam, cam_threshold=None):
             # argues both ways (an opacity with an air bronchogram running
             # through it) shows up in both channels instead of silently
             # cancelling to a net near zero.
-            cam_signed = (weights * acts).sum(dim=1)                    # (B,7,7)
+            cam_signed = (weights * acts).sum(dim=1)                    # (B,h,w)
+            if cam_signed.shape[-1] != 7:                               # ViT 14x14
+                cam_signed = F.adaptive_avg_pool2d(cam_signed[:, None], 7)[:, 0]
             cams_pos = torch.relu(cam_signed).cpu().numpy()
             cams_neg = torch.relu(-cam_signed).cpu().numpy()
 
@@ -424,7 +472,7 @@ def main():
     banner("LOADING DATA")
     banner("LOADING TRAINED C0 MODEL")
     model = load_model(MODEL_PATH)
-    model.features.register_forward_hook(hook_fn)
+    attach_hooks(model)
 
     # ── CAM orientation threshold ─────────────────────────────────────────────
     # The map is oriented toward the PREDICTED class, so the threshold has to be
@@ -540,7 +588,9 @@ def main():
         print(f"  wrote {p} ({len(LABELS)} label probs)")
 
     if args.link_into:
-        link = os.path.join(args.link_into, f"C0_ignore_{DISEASE}")
+        # DenseNet keeps its old link name; other C0s must not overwrite it.
+        tag = "" if args.arch == "densenet121" else f"{args.arch}_"
+        link = os.path.join(args.link_into, f"C0_{tag}ignore_{DISEASE}")
         if os.path.islink(link) or os.path.exists(link):
             os.remove(link)
         os.symlink(OUTPUT_DIR, link)

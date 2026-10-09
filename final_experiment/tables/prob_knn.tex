@@ -1,0 +1,24 @@
+\begin{table}[htbp]
+\centering
+\small
+\caption{Effect of adding C0's probability (P) to the best attribute model (I+Cf+D) and the best CNN (Dual+S) at $K=10$ (KNN counterfactuals). AUROC for predicting C0 correctness, mean $\pm$ std over 5 CV folds.}
+\label{tab:prob_knn}
+\begin{threeparttable}
+\begin{tabular}{lccr|ccr}
+\toprule
+\multicolumn{1}{c}{} & \multicolumn{3}{c|}{Attribute model} & \multicolumn{3}{c}{CNN} \\
+\cmidrule(lr){2-4} \cmidrule(l){5-7}
+Disease & I+Cf+D & I+Cf+D+P & $\Delta$ & Dual+S & Dual+S+P & $\Delta$ \\
+\midrule
+Atelectasis & $0.862 \pm 0.005$ & $0.861 \pm 0.005$ & $-0.0004$ & $0.856 \pm 0.006$ & $0.859 \pm 0.004$ & $+0.0027^{**}$ \\
+Cardiomegaly & $0.919 \pm 0.003$ & $0.919 \pm 0.003$ & $+0.0000$ & $0.916 \pm 0.003$ & $0.916 \pm 0.003$ & $+0.0000$ \\
+Consolidation & $0.945 \pm 0.003$ & $0.945 \pm 0.003$ & $+0.0002$ & $0.942 \pm 0.002$ & $0.942 \pm 0.002$ & $+0.0000$ \\
+Edema & $0.834 \pm 0.004$ & $0.834 \pm 0.003$ & $-0.0006$ & $0.831 \pm 0.004$ & $0.832 \pm 0.004$ & $+0.0002$ \\
+Effusion & $0.783 \pm 0.005$ & $0.782 \pm 0.004$ & $-0.0009^{*}$ & $0.778 \pm 0.005$ & $0.776 \pm 0.005$ & $-0.0014$ \\
+\bottomrule
+\end{tabular}
+\begin{tablenotes}\footnotesize
+\item P: C0's five probability scalars $[p(x_i), H(p(x_i)), p(x_{cf}), H(p(x_{cf})), p(x_i) - p(x_{cf})]$, given to the attribute model as extra inputs and to the CNN at its classification head. $\Delta$: mean-fold AUROC with P minus without. Stars: paired patient-level bootstrap of $\Delta$ (5000 replicates), Holm-adjusted across the five diseases within each model family; ***~$p_{adj} < 0.001$, **~$p_{adj} < 0.01$, *~$p_{adj} < 0.05$; no star: not significant.
+\end{tablenotes}
+\end{threeparttable}
+\end{table}

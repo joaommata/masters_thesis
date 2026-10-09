@@ -1,0 +1,22 @@
+C0 says edema (p = 0.56)  →  counterfactual p = 0.17  →  group C  →  C2 score lower than 90% of all calls
+Cases like this one: 64 in 100 edema calls are false positives, vs 35 in 100 for other positive calls
+Classifier = C0 (FP). b = counterfactual. g: ▼ C2 percentile 10%, △ MSP percentile 22%, among all calls
+At 80% coverage (the 20% least trusted calls in its fold deferred): C2 deferred, MSP accepted
+This global cut defers 47% of positive calls with C2 (47% with MSP), not a fixed 20%
+
+disease: edema
+cf source: knn_correct_cf
+side: positive calls
+group: group C
+outcome: FP (false positive)
+coverage: 80%
+rank scope: all
+C2 rank: 0.097
+MSP rank: 0.217
+C0 p (image): 0.5598
+C0 p (counterfactual): 0.1655
+row: 74975
+fold: 4
+image: CheXpert-v1.0-small/train/patient10140/study6/view1_frontal.jpg
+counterfactual: CheXpert-v1.0-small/train/patient41883/study3/view1_frontal.jpg
+similar members (e): CheXpert-v1.0-small/train/patient32310/study4/view1_frontal.jpg, CheXpert-v1.0-small/train/patient09277/study2/view1_frontal.jpg, CheXpert-v1.0-small/train/patient51090/study1/view1_frontal.jpg, CheXpert-v1.0-small/train/patient26785/study25/view1_frontal.jpg

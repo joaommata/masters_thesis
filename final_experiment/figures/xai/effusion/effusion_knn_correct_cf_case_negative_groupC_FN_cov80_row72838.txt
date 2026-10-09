@@ -1,0 +1,22 @@
+C0 says no effusion (p = 0.24)  →  counterfactual p = 0.83  →  group C  →  C2 score lower than 58% of all calls
+Cases like this one: 23 in 100 no-effusion calls are false negatives, vs 4 in 100 for other negative calls
+Classifier = C0 (FN). b = counterfactual. g: ▼ C2 percentile 42%, △ MSP percentile 34%, among all calls
+At 80% coverage (the 20% least trusted calls in its fold deferred): C2 accepted, MSP accepted
+This global cut defers 2% of negative calls with C2 (6% with MSP), not a fixed 20%
+
+disease: effusion
+cf source: knn_correct_cf
+side: negative calls
+group: group C
+outcome: FN (false negative)
+coverage: 80%
+rank scope: all
+C2 rank: 0.421
+MSP rank: 0.338
+C0 p (image): 0.2368
+C0 p (counterfactual): 0.8348
+row: 72838
+fold: 4
+image: CheXpert-v1.0-small/train/patient00555/study3/view1_frontal.jpg
+counterfactual: CheXpert-v1.0-small/train/patient00467/study35/view1_frontal.jpg
+similar members (e): CheXpert-v1.0-small/train/patient01896/study1/view1_frontal.jpg, CheXpert-v1.0-small/train/patient01885/study1/view1_frontal.jpg, CheXpert-v1.0-small/train/patient34856/study1/view1_frontal.jpg, CheXpert-v1.0-small/train/patient36883/study4/view1_frontal.jpg

@@ -1,0 +1,625 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Counterfactual Second Look</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600&family=Source+Sans+3:wght@400;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a reading-room viewer. Case list on the left, the case on a dark light-box on the
+   right, the population-level triage chart below. Dark-first because X-rays read best on dark. */
+:root {
+  --bg: #0D1015; --panel: #151A21; --raise: #1C222B; --line: #2A323D;
+  --fg: #E4E8EE; --muted: #8A94A3; --faint: #5B6573;
+  --c2: #B596CC;            /* ensemble family (thesis ENS), lifted for dark */
+  --msp: #A3A9B1;           /* MSP reference: grey, dashed */
+  --attr: #7CB4FC;          /* attributes family */
+  --lv1: #FFD2B0; --lv2: #F29A52; --lv3: #C9661A;   /* CF strength: low / mid / high */
+  --ok: #3FB27F; --bad: #F0605A;
+  --plus: #D67523; --minus: #4C8FE0;                  /* overlay: brightened / darkened */
+  --focus: #FFD2B0;
+  --f-display: "Barlow Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --f-body: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+  --f-data: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) {
+  --bg: #F3F5F8; --panel: #FFFFFF; --raise: #EEF1F5; --line: #D8DEE6;
+  --fg: #16202C; --muted: #5A6675; --faint: #8C96A3;
+  --c2: #8F69A3; --msp: #9A9A9A; --attr: #2863AB;
+  --lv1: #F5B07F; --lv2: #D3721E; --lv3: #854408;
+  --ok: #1E8A5A; --bad: #C8322C; --plus: #D67523; --minus: #2863AB; --focus: #D3721E;
+  color-scheme: light; } }
+:root[data-theme="light"] {
+  --bg: #F3F5F8; --panel: #FFFFFF; --raise: #EEF1F5; --line: #D8DEE6;
+  --fg: #16202C; --muted: #5A6675; --faint: #8C96A3;
+  --c2: #8F69A3; --msp: #9A9A9A; --attr: #2863AB;
+  --lv1: #F5B07F; --lv2: #D3721E; --lv3: #854408;
+  --ok: #1E8A5A; --bad: #C8322C; --plus: #D67523; --minus: #2863AB; --focus: #D3721E;
+  color-scheme: light; }
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.5 var(--f-body); }
+.wrap { max-width: 1320px; margin: 0 auto; padding-inline: 20px; padding-block: 20px 48px;
+        display: grid; gap: 20px; }
+h1, h2, h3 { font-family: var(--f-display); font-weight: 600; letter-spacing: .01em;
+             text-wrap: balance; margin: 0; }
+h1 { font-size: 2.1rem; line-height: 1.05; }
+h2 { font-size: 1.35rem; }
+h3 { font-size: 1.02rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+p { margin: 0; }
+.num { font-family: var(--f-data); font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
+.small { font-size: .84rem; }
+button, input { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* header */
+header { display: grid; gap: 14px; }
+.eyebrow { font-family: var(--f-data); font-size: .76rem; color: var(--muted);
+           text-transform: uppercase; letter-spacing: .08em; }
+.lede { max-width: 74ch; color: var(--muted); }
+.stats { display: flex; flex-wrap: wrap; gap: 8px 28px; padding-block: 12px;
+         border-block: 1px solid var(--line); }
+.stat { display: grid; gap: 0; }
+.stat b { font-family: var(--f-data); font-weight: 500; font-size: 1.15rem;
+          font-variant-numeric: tabular-nums; }
+.stat span { font-size: .78rem; color: var(--muted); }
+.stat .sw { display: inline-block; width: 14px; height: 0; vertical-align: middle;
+            margin-right: 6px; border-top: 2px solid var(--c2); }
+.stat .sw.msp { border-top: 2px dashed var(--msp); }
+
+/* viewer */
+.viewer { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 20px; align-items: start; }
+.rail { display: grid; gap: 12px; background: var(--panel); border: 1px solid var(--line);
+        border-radius: 6px; padding: 14px; position: sticky; top: 12px;
+        max-height: calc(100vh - 24px); grid-template-rows: auto auto 1fr; }
+.filters { display: grid; gap: 8px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { border: 1px solid var(--line); background: transparent; border-radius: 999px;
+        padding: 2px 10px; font-size: .82rem; cursor: pointer; color: var(--muted); }
+.chip[aria-pressed="true"] { background: var(--raise); color: var(--fg); border-color: var(--faint); }
+.chip:disabled { opacity: .4; cursor: not-allowed; }
+.toggle { display: flex; align-items: center; gap: 8px; font-size: .86rem; cursor: pointer; }
+.list { overflow-y: auto; display: grid; gap: 4px; align-content: start; margin-inline: -6px;
+        padding-inline: 6px; min-height: 0; }
+.item { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; align-items: center;
+        text-align: left; background: transparent; border: 1px solid transparent;
+        border-radius: 5px; padding: 7px 8px; cursor: pointer; }
+.item:hover { background: var(--raise); }
+.item[aria-current="true"] { background: var(--raise); border-color: var(--faint); }
+.item .who { font-family: var(--f-data); font-size: .78rem; }
+.item .call { font-size: .78rem; color: var(--muted); }
+.minibars { grid-column: 1 / -1; display: grid; grid-template-columns: 30px 1fr; gap: 2px 6px;
+            align-items: center; font-size: .66rem; color: var(--muted); font-family: var(--f-data); }
+.minibar { height: 4px; background: var(--line); border-radius: 2px; position: relative; }
+.minibar i { position: absolute; inset: 0 auto 0 0; border-radius: 2px; }
+
+.pill { font-family: var(--f-data); font-size: .72rem; padding: 1px 7px; border-radius: 3px;
+        border: 1px solid currentColor; white-space: nowrap; }
+.pill.ok { color: var(--ok); } .pill.bad { color: var(--bad); } .pill.hid { color: var(--faint); }
+
+.case { display: grid; gap: 16px; min-width: 0; }
+.casehead { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: end; gap: 10px; }
+.casehead .title { display: grid; gap: 2px; }
+.nav { display: flex; gap: 6px; align-items: center; }
+.btn { border: 1px solid var(--line); background: var(--panel); border-radius: 5px;
+       padding: 5px 12px; cursor: pointer; font-size: .88rem; }
+.btn:hover { border-color: var(--faint); }
+
+.lightbox { background: #07090C; border-radius: 6px; padding: 14px; display: grid; gap: 12px;
+            border: 1px solid var(--line); }
+.lightbox .bar { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 16px;
+                 align-items: center; color: #C9CFD8; }
+.seg { display: inline-flex; border: 1px solid #2C333D; border-radius: 5px; overflow: hidden; }
+.seg button { background: transparent; border: 0; padding: 4px 11px; font-size: .82rem;
+              color: #9AA3AF; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: #1F262F; color: #F1F3F6; }
+.films { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.film { display: grid; gap: 6px; margin: 0; }
+.film .img { position: relative; aspect-ratio: 1; max-width: 100%; background: #000; border-radius: 3px;
+             overflow: hidden; }
+.film img { position: absolute; inset: 0; width: 100%; height: 100%; image-rendering: auto; }
+.film img.ov { transition: opacity .15s; }
+.film figcaption { display: flex; justify-content: space-between; gap: 6px; font-size: .78rem;
+                   color: #AEB6C1; align-items: baseline; }
+.film figcaption b { font-family: var(--f-display); font-weight: 600; font-size: .95rem;
+                     letter-spacing: .04em; text-transform: uppercase; color: #E8EBEF; }
+.film figcaption .num { color: #E8EBEF; }
+.film .tag { position: absolute; left: 6px; top: 6px; font-family: var(--f-data); font-size: .68rem;
+             background: rgba(0,0,0,.6); color: #E8EBEF; padding: 1px 5px; border-radius: 3px; }
+.legend-ov { display: flex; gap: 14px; font-size: .78rem; color: #AEB6C1; flex-wrap: wrap; }
+.legend-ov i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px;
+               vertical-align: -1px; }
+
+.panels { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr) minmax(0, 1.2fr); gap: 14px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 14px;
+         display: grid; gap: 10px; align-content: start; min-width: 0; }
+.panel .note { font-size: .8rem; color: var(--muted); }
+
+.trust { display: grid; gap: 12px; }
+.trow { display: grid; gap: 4px; }
+.trow .lab { display: flex; justify-content: space-between; font-size: .86rem; }
+.track { position: relative; height: 10px; background: var(--raise); border-radius: 5px; }
+.track i { position: absolute; top: -3px; width: 3px; height: 16px; border-radius: 2px; }
+.track .fill { position: absolute; inset: 0 auto 0 0; border-radius: 5px; opacity: .35; }
+.track.msp .fill { background: repeating-linear-gradient(90deg, var(--msp) 0 6px, transparent 6px 9px); opacity: .5; }
+.scale { display: flex; justify-content: space-between; font-size: .7rem; color: var(--faint); }
+.verdict { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding-top: 8px;
+           border-top: 1px solid var(--line); font-size: .9rem; }
+
+svg text { fill: var(--muted); font-family: var(--f-data); font-size: 10px; }
+svg .ink { fill: var(--fg); }
+.tip { position: absolute; pointer-events: none; background: var(--raise); border: 1px solid var(--line);
+       border-radius: 5px; padding: 6px 9px; font-size: .78rem; white-space: nowrap; z-index: 5;
+       box-shadow: 0 4px 14px rgba(0,0,0,.25); }
+.chartbox { position: relative; }
+.keyrow { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: .78rem; color: var(--muted); }
+.keyrow span { display: inline-flex; align-items: center; gap: 6px; }
+
+/* triage */
+.triage { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 20px;
+          background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 18px; }
+.triage .side { display: grid; gap: 14px; align-content: start; }
+.readout { display: grid; grid-template-columns: auto 1fr 1fr; gap: 6px 14px; align-items: baseline; }
+.readout .h { font-size: .74rem; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.readout .v { font-family: var(--f-data); font-size: 1.15rem; font-variant-numeric: tabular-nums; }
+input[type="range"] { width: 100%; accent-color: var(--c2); }
+.honest { font-size: .86rem; color: var(--muted); border-left: 2px solid var(--line); padding-left: 10px; }
+
+footer { color: var(--muted); font-size: .82rem; display: grid; gap: 6px; max-width: 90ch; }
+
+@media (max-width: 1080px) {
+  .panels { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .panels .panel.attrs { grid-column: 1 / -1; }
+}
+@media (max-width: 860px) {
+  .viewer, .triage { grid-template-columns: minmax(0, 1fr); }
+  .rail { position: static; max-height: none; }
+  .list { max-height: 260px; }
+  .films { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .panels { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 480px) { .wrap { padding-inline: 16px; } h1 { font-size: 1.7rem; } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="eyebrow" id="eyebrow">CheXpert · pleural effusion · held-out calls</div>
+    <h1>Counterfactual Second Look</h1>
+    <p class="lede">A classifier (C0) reads a chest X-ray. A diffusion model then edits the image until C0 changes
+      its mind, at three strengths. A second model (C2) looks at the image, the edit and how the image changed
+      to judge whether C0's first call can be trusted. Its score is shown next to C0's own confidence (MSP).</p>
+    <div class="stats" id="stats"></div>
+  </header>
+
+  <section class="viewer" aria-label="Case viewer">
+    <aside class="rail">
+      <div class="filters">
+        <h3>Cases</h3>
+        <div class="chips" id="cellChips" role="group" aria-label="Filter by C0 outcome"></div>
+        <div class="chips" id="pickChips" role="group" aria-label="Filter by how the case was picked"></div>
+        <label class="toggle" for="quiz"><input type="checkbox" id="quiz"> Hide ground truth until revealed</label>
+      </div>
+      <p class="small muted" id="listNote"></p>
+      <div class="list" id="list" role="listbox" aria-label="Cases"></div>
+    </aside>
+
+    <article class="case" id="case"></article>
+  </section>
+
+  <section aria-label="Triage">
+    <div class="triage">
+      <div class="chartbox" id="triageBox">
+        <h2>What if the least-trusted calls went to a radiologist?</h2>
+        <p class="small muted" style="margin-block: 4px 10px">Accuracy on the calls that are kept, when the
+          least-trusted share is sent for review. Over all <span id="nAll" class="num"></span> held-out calls, not only the cases above.</p>
+        <div class="keyrow" id="triageKey"></div>
+        <svg id="triage" role="img" aria-label="Accuracy of kept calls versus share sent for review"></svg>
+      </div>
+      <div class="side">
+        <label for="reject"><h3>Send for review</h3></label>
+        <div><span class="num" id="rejectVal" style="font-size:1.6rem"></span>
+          <span class="muted"> of calls, least-trusted first</span></div>
+        <input type="range" id="reject" min="0" max="60" step="1" value="20">
+        <div class="readout" id="readout"></div>
+        <p class="honest" id="honest"></p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <p><b>How to read this.</b> Scores are percentiles among C0's calls of the same kind (all positive calls, or
+      all negative calls): 0 is the least trusted, 100 the most. C2 is trained with class-balanced weights,
+      so its raw output is a ranking, not a probability. MSP is the threshold variant: the probability of the
+      class C0 predicted at its own threshold.</p>
+    <p><b>The edit.</b> Each counterfactual is generated from the input with FastDiME and guided to a target
+      C0 probability (low, mid, high strength). The diffusion reconstruction alone changes every pixel a little,
+      and that part is shared by all three levels. "Guided edit" shows the stronger levels minus the weakest,
+      which isolates what the extra push changes. "Change vs input" shows everything, reconstruction included.</p>
+    <p><b>Cases.</b> Per C0 outcome, 3 cases where C2 trusts the call much more than MSP does, 3 where it trusts
+      it much less, and 4 at random. Every score is out-of-fold: the case was in the test fold of the model that scored it.
+      Attributes compare the image with its high-strength counterfactual, in SD units of the images.</p>
+  </footer>
+</div>
+
+<script src="data.js"></script>
+<script>
+(() => {
+"use strict";
+const D = window.DEMO;
+const $ = (s) => document.querySelector(s);
+const el = (tag, attrs = {}, ...kids) => {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v == null) continue;
+    if (k === "class") n.className = v; else if (k === "text") n.textContent = v;
+    else if (k.startsWith("on")) n.addEventListener(k.slice(2), v); else n.setAttribute(k, v);
+  }
+  for (const k of kids) if (k != null) n.append(k);
+  return n;
+};
+const SVG = "http://www.w3.org/2000/svg";
+const sv = (tag, attrs = {}) => {
+  const n = document.createElementNS(SVG, tag);
+  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+  return n;
+};
+const pct = (x) => Math.round(x * 100);
+const fmt = (x, d = 3) => x.toFixed(d);
+const cap = (s) => s[0].toUpperCase() + s.slice(1);
+const DIS = cap(D.disease);
+const store = {
+  get(k, d) { try { const v = localStorage.getItem("cfsl:" + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem("cfsl:" + k, JSON.stringify(v)); } catch {} },
+};
+
+// ── header ──
+$("#eyebrow").textContent = `CheXpert · ${D.disease} · ${D.n.toLocaleString()} held-out calls`;
+const errs = D.cells.FP + D.cells.FN;
+$("#stats").append(
+  stat(`${fmt(D.accuracy * 100, 1)}%`, `C0 accuracy at threshold ${fmt(D.threshold, 3)}`),
+  stat(errs.toLocaleString(), `C0 errors (${D.cells.FP.toLocaleString()} FP, ${D.cells.FN.toLocaleString()} FN)`),
+  stat(`${fmt(D.auc.c2[0])} ± ${fmt(D.auc.c2[1])}`, "C2 AUROC for spotting errors", "c2"),
+  stat(`${fmt(D.auc.msp[0])} ± ${fmt(D.auc.msp[1])}`, "MSP AUROC (C0's own confidence)", "msp"),
+);
+function stat(v, lab, sw) {
+  return el("div", { class: "stat" }, el("b", {}, sw ? el("i", { class: "sw " + (sw === "msp" ? "msp" : "") }) : null, v),
+            el("span", { text: lab }));
+}
+
+// ── state ──
+const S = {
+  cell: store.get("cell", "all"), pick: store.get("pick", "all"),
+  overlay: store.get("overlay", "guided"), quiz: store.get("quiz", false),
+  id: null, revealed: new Set(),
+};
+$("#quiz").checked = S.quiz;
+
+const CELLS = { all: "All", TP: "True +", FP: "False +", TN: "True −", FN: "False −" };
+const PICKS = { all: "Any pick", c2_trusts_more: "C2 trusts more", msp_trusts_more: "MSP trusts more", random: "Random" };
+function chips(host, map, key) {
+  host.replaceChildren(...Object.entries(map).map(([k, v]) => el("button", {
+    class: "chip", "aria-pressed": String(S[key] === k), text: v,
+    onclick: () => { S[key] = k; store.set(key, k); renderChips(); renderList(true); },
+  })));
+}
+function renderChips() {
+  chips($("#cellChips"), CELLS, "cell");
+  chips($("#pickChips"), PICKS, "pick");
+  $("#cellChips").querySelectorAll("button").forEach((b, i) => { if (S.quiz && i > 0) b.disabled = true; });
+}
+$("#quiz").addEventListener("change", (e) => {
+  S.quiz = e.target.checked; store.set("quiz", S.quiz); S.revealed.clear();
+  if (S.quiz) { S.cell = "all"; store.set("cell", "all"); }
+  renderChips(); renderList(false); renderCase();
+});
+
+const shown = (c) => !S.quiz || S.revealed.has(c.id);
+const callText = (c) => `C0 says ${c.pred ? "effusion" : "no effusion"}`.replace("effusion", D.disease);
+const outcomePill = (c) => shown(c)
+  ? el("span", { class: "pill " + (c.correct ? "ok" : "bad"), text: `${c.correct ? "✓" : "✗"} ${c.cell}` })
+  : el("span", { class: "pill hid", text: "? hidden" });
+
+function visible() {
+  return D.cases.filter((c) => (S.cell === "all" || c.cell === S.cell) && (S.pick === "all" || c.pick === S.pick));
+}
+function renderList(resetSel) {
+  const vs = visible();
+  $("#listNote").textContent = `${vs.length} of ${D.cases.length} curated cases · ↑ ↓ to step through`;
+  if (resetSel || !vs.some((c) => c.id === S.id)) S.id = vs.length ? vs[0].id : null;
+  $("#list").replaceChildren(...vs.map((c) => el("button", {
+      class: "item", role: "option", "aria-current": String(c.id === S.id), "aria-selected": String(c.id === S.id),
+      onclick: () => { S.id = c.id; renderList(false); renderCase(); },
+    },
+    el("span", { class: "who", text: c.study }), outcomePill(c),
+    el("span", { class: "call", text: `${callText(c)} · p ${fmt(c.prob, 2)}` }), el("span"),
+    el("div", { class: "minibars" },
+      el("span", { text: "C2" }), bar(c.c2_pct, "var(--c2)"),
+      el("span", { text: "MSP" }), bar(c.msp_pct, "var(--msp)")),
+  )));
+  renderCase();
+}
+function bar(v, color) {
+  const i = el("i"); i.style.width = pct(v) + "%"; i.style.background = color;
+  return el("div", { class: "minibar" }, i);
+}
+
+// ── the case ──
+function renderCase() {
+  const host = $("#case");
+  const c = D.cases.find((x) => x.id === S.id);
+  if (!c) { host.replaceChildren(el("p", { class: "muted", text: "No cases match these filters." })); return; }
+  const vs = visible(), k = vs.findIndex((x) => x.id === c.id);
+  const side = c.pred ? "positive" : "negative";
+
+  const head = el("div", { class: "casehead" },
+    el("div", { class: "title" },
+      el("span", { class: "eyebrow", text: `${c.study} · ${PICKS[c.pick]} · fold ${c.fold}` }),
+      el("h2", { text: `${callText(c)} (p = ${fmt(c.prob, 3)}, threshold ${fmt(D.threshold, 3)})` })),
+    el("div", { class: "nav" },
+      el("button", { class: "btn", text: "← Prev", onclick: () => step(-1) }),
+      el("span", { class: "small muted num", text: `${k + 1}/${vs.length}` }),
+      el("button", { class: "btn", text: "Next →", onclick: () => step(1) })));
+  const [prev, next] = head.querySelectorAll(".btn");
+  prev.disabled = k <= 0; next.disabled = k >= vs.length - 1;
+
+  // films
+  const OV = { guided: "Guided edit", input: "Change vs input", off: "Off" };
+  const seg = el("div", { class: "seg", role: "group", "aria-label": "Overlay" },
+    ...Object.entries(OV).map(([key, lab]) => el("button", {
+      "aria-pressed": String(S.overlay === key), text: lab,
+      onclick: () => { S.overlay = key; store.set("overlay", key); renderCase(); } })));
+  const films = el("div", { class: "films" }, film(c, "x0", "Input", c.prob, null));
+  c.levels.forEach((L, i) => films.append(film(c, L.name, `${cap(L.name)} edit`, L.prob, L, i)));
+  const lb = el("div", { class: "lightbox" },
+    el("div", { class: "bar" },
+      el("div", { class: "legend-ov" },
+        el("span", {}, swatch("var(--plus)"), "brighter after edit"),
+        el("span", {}, swatch("var(--minus)"), "darker after edit"),
+        el("span", { text: S.overlay === "guided" ? "vs the weakest edit, shared scale"
+          : S.overlay === "input" ? "vs the input; mostly diffusion reconstruction" : "" })),
+      seg),
+    films);
+
+  host.replaceChildren(head, lb, el("div", { class: "panels" }, trustPanel(c, side), trajPanel(c), attrPanel(c, side)));
+}
+function swatch(color) { const i = el("i"); i.style.background = color; return i; }
+function film(c, key, label, prob, L, i) {
+  const box = el("div", { class: "img" }, el("img", { src: `img/${c.id}_${key}.png`, alt: `${label}, C0 p = ${fmt(prob, 3)}` }));
+  if (L) {
+    let ov = null;
+    if (S.overlay === "input") ov = `img/${c.id}_${key}_d.png`;
+    if (S.overlay === "guided" && key !== "low") ov = `img/${c.id}_${key}_g.png`;
+    if (ov) box.append(el("img", { class: "ov", src: ov, alt: "" }));
+    if (S.overlay === "guided" && key === "low") box.append(el("span", { class: "tag", text: "reference" }));
+    const flip = (prob >= D.threshold) !== (c.prob >= D.threshold);
+    box.append(el("span", { class: "tag", style: "left:auto;right:6px", text: flip ? "call flips" : "no flip" }));
+  }
+  const dot = el("i"); dot.style.cssText = `display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;background:${L ? `var(--lv${i + 1})` : "#E8EBEF"}`;
+  return el("figure", { class: "film" }, box,
+    el("figcaption", {}, el("b", {}, dot, label), el("span", {}, "p ", el("span", { class: "num", text: fmt(prob, 3) }))));
+}
+function step(d) {
+  const vs = visible(), k = vs.findIndex((x) => x.id === S.id), n = vs[k + d];
+  if (n) { S.id = n.id; renderList(false); document.querySelector('.item[aria-current="true"]')?.scrollIntoView({ block: "nearest" }); }
+}
+document.addEventListener("keydown", (e) => {
+  if (e.target.matches("input, textarea")) return;
+  if (e.key === "ArrowDown" || e.key === "j") { e.preventDefault(); step(1); }
+  if (e.key === "ArrowUp" || e.key === "k") { e.preventDefault(); step(-1); }
+});
+
+function trustPanel(c, side) {
+  const row = (name, v, cls, color) => {
+    const t = el("div", { class: "track " + cls });
+    const f = el("div", { class: "fill" }); f.style.width = pct(v) + "%"; if (cls !== "msp") f.style.background = color;
+    const m = el("i"); m.style.left = `calc(${pct(v)}% - 1.5px)`; m.style.background = color;
+    t.append(f, m);
+    return el("div", { class: "trow" },
+      el("div", { class: "lab" }, el("span", { text: name }), el("span", { class: "num", text: `${pct(v)}th pct` })), t);
+  };
+  const gap = pct(c.c2_pct) - pct(c.msp_pct);
+  const reveal = el("div", { class: "verdict" });
+  if (shown(c)) {
+    reveal.append(outcomePill(c), el("span", { text: c.correct
+      ? `C0 was right. Ground truth: ${c.true ? D.disease : "no " + D.disease}.`
+      : `C0 was wrong. Ground truth: ${c.true ? D.disease : "no " + D.disease}.` }));
+  } else {
+    reveal.append(el("button", { class: "btn", text: "Reveal ground truth",
+      onclick: () => { S.revealed.add(c.id); renderList(false); } }),
+      el("span", { class: "small muted", text: "Which score would you have believed?" }));
+  }
+  return el("section", { class: "panel" },
+    el("h3", { text: "Trust in this call" }),
+    el("div", { class: "trust" },
+      row("C2 (image + counterfactual)", c.c2_pct, "", "var(--c2)"),
+      row("MSP (C0's confidence)", c.msp_pct, "msp", "var(--msp)"),
+      el("div", { class: "scale" }, el("span", { text: "least trusted" }), el("span", { text: `among C0's ${side} calls` }), el("span", { text: "most" }))),
+    el("p", { class: "note", text: Math.abs(gap) < 10 ? "C2 and MSP roughly agree on this call."
+      : gap > 0 ? `C2 trusts this call ${gap} percentile points more than MSP does.`
+                : `C2 trusts this call ${-gap} percentile points less than MSP does.` }),
+    reveal);
+}
+
+function trajPanel(c) {
+  const W = 340, H = 200, m = { l: 34, r: 12, t: 10, b: 30 };
+  const x = (t) => m.l + (1 - t / D.tau) * (W - m.l - m.r);
+  const y = (p) => m.t + (1 - p) * (H - m.t - m.b);
+  const s = sv("svg", { viewBox: `0 0 ${W} ${H}`, width: "100%", role: "img",
+    "aria-label": "C0 probability during each edit" });
+  for (const p of [0, .25, .5, .75, 1]) {
+    s.append(sv("line", { x1: m.l, x2: W - m.r, y1: y(p), y2: y(p), stroke: "var(--line)", "stroke-width": 1 }));
+    const t = sv("text", { x: m.l - 6, y: y(p) + 3, "text-anchor": "end" }); t.textContent = p.toFixed(2); s.append(t);
+  }
+  for (const tt of [D.tau, 100, 50, 0]) {
+    const t = sv("text", { x: x(tt), y: H - m.b + 14, "text-anchor": "middle" }); t.textContent = tt; s.append(t);
+  }
+  const xl = sv("text", { x: (W + m.l) / 2, y: H - 3, "text-anchor": "middle" }); xl.textContent = "diffusion step (noise → image)"; s.append(xl);
+  s.append(sv("line", { x1: m.l, x2: W - m.r, y1: y(D.threshold), y2: y(D.threshold), stroke: "var(--fg)",
+    "stroke-width": 1, "stroke-dasharray": "2 3", opacity: .7 }));
+  const thl = sv("text", { x: W - m.r - 2, y: y(D.threshold) - 4, "text-anchor": "end", class: "ink" }); thl.textContent = "C0 threshold"; s.append(thl);
+  const targets = c.pred ? D.targets.to_negative : D.targets.to_positive;
+  c.levels.forEach((L, i) => {
+    const pts = [[D.tau, c.prob], ...L.traj];
+    s.append(sv("line", { x1: m.l, x2: W - m.r, y1: y(targets[i]), y2: y(targets[i]),
+      stroke: `var(--lv${i + 1})`, "stroke-width": 1, "stroke-dasharray": "1 4", opacity: .8 }));
+    s.append(sv("polyline", { points: pts.map(([t, p]) => `${x(t)},${y(p)}`).join(" "), fill: "none",
+      stroke: `var(--lv${i + 1})`, "stroke-width": 2, "stroke-linejoin": "round" }));
+    const last = pts[pts.length - 1];
+    s.append(sv("circle", { cx: x(last[0]), cy: y(last[1]), r: 3.5, fill: `var(--lv${i + 1})`, stroke: "var(--panel)", "stroke-width": 1.5 }));
+  });
+  s.append(sv("circle", { cx: x(D.tau), cy: y(c.prob), r: 4, fill: "var(--fg)", stroke: "var(--panel)", "stroke-width": 1.5 }));
+  const key = el("div", { class: "keyrow" },
+    ...c.levels.map((L, i) => el("span", {}, lineKey(`var(--lv${i + 1})`), `${L.name} → ${fmt(L.prob, 2)}`)),
+    el("span", {}, lineKey("var(--muted)", "1 4"), "target"));
+  return el("section", { class: "panel" }, el("h3", { text: "How C0 changed its mind" }), key, s,
+    el("p", { class: "note", text: `Starting from the input (p ${fmt(c.prob, 3)}), each edit is steered toward its target. An image that needs only a small push to flip is one C0 was not sure about.` }));
+}
+function lineKey(color, dash) {
+  const s = sv("svg", { width: 18, height: 8 });
+  s.append(sv("line", { x1: 0, x2: 18, y1: 4, y2: 4, stroke: color, "stroke-width": 2, ...(dash ? { "stroke-dasharray": dash } : {}) }));
+  return s;
+}
+
+function attrPanel(c, side) {
+  const A = D.attributes[String(c.pred)];
+  const W = 420, row = 30, m = { l: 150, r: 14, t: 18, b: 26 };
+  const H = m.t + m.b + row * A.length;
+  const lo = -3, hi = 3;
+  const x = (v) => m.l + (Math.max(lo, Math.min(hi, v)) - lo) / (hi - lo) * (W - m.l - m.r);
+  const s = sv("svg", { viewBox: `0 0 ${W} ${H}`, width: "100%", role: "img", "aria-label": "Attributes: image versus counterfactual" });
+  for (const v of [-3, -2, -1, 0, 1, 2, 3]) {
+    s.append(sv("line", { x1: x(v), x2: x(v), y1: m.t - 6, y2: H - m.b, stroke: v === 0 ? "var(--faint)" : "var(--line)", "stroke-width": 1 }));
+    const t = sv("text", { x: x(v), y: H - m.b + 14, "text-anchor": "middle" }); t.textContent = (v > 0 ? "+" : "") + v; s.append(t);
+  }
+  const xl = sv("text", { x: (W + m.l) / 2, y: H - 2, "text-anchor": "middle" }); xl.textContent = "SD from the average image"; s.append(xl);
+  A.forEach((a, i) => {
+    const cy = m.t + row * i + row / 2;
+    const lab = sv("text", { x: m.l - 8, y: cy + 3, "text-anchor": "end", class: "ink" });
+    lab.textContent = a.name.length > 24 ? a.name.slice(0, 23) + "…" : a.name; s.append(lab);
+    const tip = sv("title"); tip.textContent = `${a.raw}\nstrongest signal in the ${a.form} (r = ${a.r} with C0 being right)`; lab.append(tip);
+    // group context: average image value of right vs wrong calls on this side
+    s.append(sv("line", { x1: x(a.right[0]), x2: x(a.right[0]), y1: cy - 8, y2: cy + 8, stroke: "var(--ok)", "stroke-width": 2, opacity: .8 }));
+    s.append(sv("line", { x1: x(a.wrong[0]), x2: x(a.wrong[0]), y1: cy - 8, y2: cy + 8, stroke: "var(--bad)", "stroke-width": 2, opacity: .8 }));
+    const [vi, vc] = c.attrs[i];
+    if (vi == null || vc == null) {
+      const t = sv("text", { x: x(0), y: cy + 3, "text-anchor": "middle" }); t.textContent = "organ not segmented"; s.append(t); return;
+    }
+    s.append(sv("line", { x1: x(vi), x2: x(vc), y1: cy, y2: cy, stroke: "var(--attr)", "stroke-width": 3, opacity: .45 }));
+    s.append(sv("circle", { cx: x(vc), cy, r: 5, fill: "var(--panel)", stroke: "var(--attr)", "stroke-width": 2 }));
+    const dot = sv("circle", { cx: x(vi), cy, r: 5, fill: "var(--attr)", stroke: "var(--panel)", "stroke-width": 1.5 });
+    const t2 = sv("title"); t2.textContent = `image ${vi.toFixed(2)} SD · counterfactual ${vc.toFixed(2)} SD`; dot.append(t2);
+    s.append(dot);
+  });
+  const key = el("div", { class: "keyrow" },
+    el("span", {}, dotKey(true), "this image"), el("span", {}, dotKey(false), "its counterfactual (high)"),
+    el("span", {}, tickKey("var(--ok)"), `avg. right ${side} call`), el("span", {}, tickKey("var(--bad)"), `avg. wrong ${side} call`));
+  return el("section", { class: "panel attrs" },
+    el("h3", { text: `What differs: top attributes for ${side} calls` }), key, s,
+    el("p", { class: "note", text: "Organ measurements most related to C0 being right on this kind of call. Hover a name for its signal. Values beyond ±3 SD are drawn at the edge." }));
+}
+function dotKey(filled) { const s = sv("svg", { width: 12, height: 12 }); s.append(sv("circle", { cx: 6, cy: 6, r: 4.5, fill: filled ? "var(--attr)" : "var(--panel)", stroke: "var(--attr)", "stroke-width": filled ? 0 : 2 })); return s; }
+function tickKey(color) { const s = sv("svg", { width: 6, height: 14 }); s.append(sv("line", { x1: 3, x2: 3, y1: 0, y2: 14, stroke: color, "stroke-width": 2 })); return s; }
+
+// ── triage chart ──
+const T = D.triage;
+$("#nAll").textContent = D.n.toLocaleString();
+$("#triageKey").append(
+  el("span", {}, lineKey("var(--c2)"), "C2"),
+  el("span", {}, lineKey("var(--msp)", "5 3"), "MSP"),
+  el("span", {}, lineKey("var(--faint)", "1 3"), "perfect ranking"));
+const rej = T.coverage.map((c) => 1 - c);        // share sent for review
+function accAt(series, r) {                       // interpolate at a rejection share
+  let best = 0;
+  for (let i = 0; i < rej.length; i++) if (Math.abs(rej[i] - r) < Math.abs(rej[best] - r)) best = i;
+  return { acc: series[best], cov: T.coverage[best] };
+}
+function drawTriage() {
+  const s = $("#triage"), box = $("#triageBox");
+  const W = 640, H = 300, m = { l: 44, r: 58, t: 12, b: 34 };
+  const xMax = 0.6, yMin = Math.floor(D.accuracy * 20) / 20, yMax = 1;
+  const x = (r) => m.l + r / xMax * (W - m.l - m.r);
+  const y = (a) => m.t + (1 - (a - yMin) / (yMax - yMin)) * (H - m.t - m.b);
+  s.setAttribute("viewBox", `0 0 ${W} ${H}`); s.setAttribute("width", "100%"); s.replaceChildren();
+  for (let a = yMin; a <= 1.0001; a += 0.05) {
+    s.append(sv("line", { x1: m.l, x2: W - m.r, y1: y(a), y2: y(a), stroke: "var(--line)", "stroke-width": 1 }));
+    const t = sv("text", { x: m.l - 6, y: y(a) + 3, "text-anchor": "end" }); t.textContent = Math.round(a * 100) + "%"; s.append(t);
+  }
+  for (let r = 0; r <= xMax + 1e-9; r += 0.1) {
+    const t = sv("text", { x: x(r), y: H - m.b + 15, "text-anchor": "middle" }); t.textContent = Math.round(r * 100) + "%"; s.append(t);
+  }
+  const xl = sv("text", { x: (W - m.r + m.l) / 2, y: H - 3, "text-anchor": "middle" }); xl.textContent = "share of calls sent for review"; s.append(xl);
+  const path = (series) => rej.map((r, i) => [r, series[i]]).filter(([r]) => r <= xMax + 1e-9)
+    .map(([r, a]) => `${x(r)},${y(Math.max(a, yMin))}`).join(" ");
+  const cur = +$("#reject").value / 100;
+  s.append(sv("line", { x1: x(cur), x2: x(cur), y1: m.t, y2: H - m.b, stroke: "var(--faint)", "stroke-width": 1 }));
+  s.append(sv("polyline", { points: path(T.oracle), fill: "none", stroke: "var(--faint)", "stroke-width": 1.5, "stroke-dasharray": "1 3" }));
+  s.append(sv("polyline", { points: path(T.msp), fill: "none", stroke: "var(--msp)", "stroke-width": 1.5, "stroke-dasharray": "5 3" }));
+  s.append(sv("polyline", { points: path(T.c2), fill: "none", stroke: "var(--c2)", "stroke-width": 2, "stroke-linejoin": "round" }));
+  const a2 = accAt(T.c2, cur).acc, am = accAt(T.msp, cur).acc;
+  s.append(sv("circle", { cx: x(cur), cy: y(a2), r: 4.5, fill: "var(--c2)", stroke: "var(--panel)", "stroke-width": 2 }));
+  s.append(sv("circle", { cx: x(cur), cy: y(am), r: 4, fill: "var(--panel)", stroke: "var(--msp)", "stroke-width": 2 }));
+  // direct labels at the right end
+  const endR = xMax, e2 = accAt(T.c2, endR).acc, em = accAt(T.msp, endR).acc;
+  const l1 = sv("text", { x: x(endR) + 6, y: y(e2) + (e2 >= em ? -2 : 10), class: "ink" }); l1.textContent = "C2";
+  const l2 = sv("text", { x: x(endR) + 6, y: y(em) + (e2 >= em ? 10 : -2) }); l2.textContent = "MSP";
+  s.append(l1, l2);
+  // hover
+  const hit = sv("rect", { x: m.l, y: m.t, width: W - m.l - m.r, height: H - m.t - m.b, fill: "transparent" });
+  const cross = sv("line", { y1: m.t, y2: H - m.b, stroke: "var(--muted)", "stroke-width": 1, visibility: "hidden" });
+  s.append(cross, hit);
+  let tip = box.querySelector(".tip"); if (!tip) { tip = el("div", { class: "tip", hidden: "" }); box.append(tip); }
+  hit.addEventListener("pointermove", (ev) => {
+    const pt = s.getBoundingClientRect(), sx = (ev.clientX - pt.left) / pt.width * W;
+    const r = Math.max(0, Math.min(xMax, (sx - m.l) / (W - m.l - m.r) * xMax));
+    const c2 = accAt(T.c2, r), ms = accAt(T.msp, r);
+    cross.setAttribute("x1", x(r)); cross.setAttribute("x2", x(r)); cross.setAttribute("visibility", "visible");
+    tip.hidden = false;
+    tip.replaceChildren(el("div", { text: `review ${Math.round(r * 100)}% of calls` }),
+      el("div", { class: "num", text: `C2  ${fmt(c2.acc * 100, 1)}% accurate` }),
+      el("div", { class: "num", text: `MSP ${fmt(ms.acc * 100, 1)}% accurate` }));
+    const bx = box.getBoundingClientRect();
+    tip.style.left = Math.min(ev.clientX - bx.left + 12, bx.width - 170) + "px";
+    tip.style.top = (ev.clientY - bx.top + 12) + "px";
+  });
+  hit.addEventListener("pointerleave", () => { tip.hidden = true; cross.setAttribute("visibility", "hidden"); });
+  hit.addEventListener("click", (ev) => {
+    const pt = s.getBoundingClientRect(), sx = (ev.clientX - pt.left) / pt.width * W;
+    $("#reject").value = Math.round(Math.max(0, Math.min(xMax, (sx - m.l) / (W - m.l - m.r) * xMax)) * 100);
+    updateTriage();
+  });
+}
+function updateTriage() {
+  const r = +$("#reject").value / 100;
+  $("#rejectVal").textContent = Math.round(r * 100) + "%";
+  const row = (name, series) => {
+    const { acc, cov } = accAt(series, r);
+    const kept = Math.round(cov * D.n), errKept = Math.round(kept * (1 - acc));
+    return [el("span", { text: name }), el("span", { class: "v", text: fmt(acc * 100, 1) + "%" }),
+            el("span", { class: "v", text: (errs - errKept).toLocaleString() })];
+  };
+  $("#readout").replaceChildren(
+    el("span", { class: "h" }), el("span", { class: "h", text: "kept accuracy" }), el("span", { class: "h", text: "errors caught" }),
+    ...row("C2", T.c2), ...row("MSP", T.msp), ...row("Perfect", T.oracle));
+  const d = accAt(T.c2, r).acc - accAt(T.msp, r).acc;
+  $("#honest").textContent = (Math.abs(d) < 0.005
+    ? `At this review rate C2 and MSP are within half a point of each other. `
+    : `At this review rate ${d > 0 ? "C2" : "MSP"} is ${fmt(Math.abs(d) * 100, 1)} points ahead. `) +
+    `Across folds the two rank errors about equally well on ${D.disease} (AUROC ${fmt(D.auc.c2[0])} vs ${fmt(D.auc.msp[0])}). ` +
+    `What C2 adds is the counterfactual above: a picture of what would change C0's mind.`;
+  drawTriage();
+}
+$("#reject").addEventListener("input", updateTriage);
+
+renderChips();
+renderList(false);
+updateTriage();
+})();
+</script>
+</body>
+</html>

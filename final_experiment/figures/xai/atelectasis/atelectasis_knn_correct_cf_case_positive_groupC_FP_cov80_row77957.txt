@@ -1,0 +1,22 @@
+C0 says atelectasis (p = 0.23)  →  counterfactual p = 0.08  →  group C  →  C2 score lower than 87% of all calls
+Cases like this one: 78 in 100 atelectasis calls are false positives, vs 70 in 100 for other positive calls
+Classifier = C0 (FP). b = counterfactual. g: ▼ C2 percentile 13%, △ MSP percentile 11%, among all calls
+At 80% coverage (the 20% least trusted calls in its fold deferred): C2 deferred, MSP deferred
+This global cut defers 41% of positive calls with C2 (41% with MSP), not a fixed 20%
+
+disease: atelectasis
+cf source: knn_correct_cf
+side: positive calls
+group: group C
+outcome: FP (false positive)
+coverage: 80%
+rank scope: all
+C2 rank: 0.129
+MSP rank: 0.108
+C0 p (image): 0.2315
+C0 p (counterfactual): 0.0833
+row: 77957
+fold: 4
+image: CheXpert-v1.0-small/train/patient43649/study1/view1_frontal.jpg
+counterfactual: CheXpert-v1.0-small/train/patient16748/study1/view1_frontal.jpg
+similar members (e): CheXpert-v1.0-small/train/patient22270/study2/view1_frontal.jpg, CheXpert-v1.0-small/train/patient52806/study1/view1_frontal.jpg, CheXpert-v1.0-small/train/patient35644/study12/view1_frontal.jpg, CheXpert-v1.0-small/train/patient41906/study2/view1_frontal.jpg

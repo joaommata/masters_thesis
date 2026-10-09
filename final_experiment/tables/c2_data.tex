@@ -1,0 +1,24 @@
+\begin{table}[htbp]
+\centering
+\small
+\caption{The correctness task $C_0$ hands to $C_2$, per disease. $C_0$ is applied to the held-out set, which it never saw during training or selection; these images are $C_2$'s training and test data, and $C_0$'s errors on them are the class $C_2$ learns to detect.}
+\label{tab:c2_data}
+\begin{threeparttable}
+\begin{tabular}{lrrc|rrr}
+\toprule
+& \multicolumn{3}{c|}{Held-out set ($C_2$ train + test)} & \multicolumn{3}{c}{$C_0$ errors} \\
+\cmidrule(lr){2-4} \cmidrule(lr){5-7}
+Disease & Images & Pos.\ (\%) & Threshold & Errors (\%) & FP & FN \\
+\midrule
+Atelectasis & $80{,}938$ & $18.6$ & $0.189$ & $32{,}809$ ($40.5$) & $29{,}028$ & $3{,}781$ \\
+Cardiomegaly & $92{,}507$ & $12.5$ & $0.160$ & $17{,}548$ ($19.0$) & $14{,}769$ & $2{,}779$ \\
+Consolidation & $83{,}688$ & $7.8$ & $0.067$ & $32{,}530$ ($38.9$) & $30{,}845$ & $1{,}685$ \\
+Edema & $89{,}852$ & $27.8$ & $0.285$ & $22{,}615$ ($25.2$) & $17{,}677$ & $4{,}938$ \\
+Effusion & $90{,}934$ & $42.2$ & $0.393$ & $18{,}694$ ($20.6$) & $13{,}264$ & $5{,}430$ \\
+\bottomrule
+\end{tabular}
+\begin{tablenotes}\footnotesize
+\item Images: confidently labelled images for that disease in the held-out set ($95{,}835$ images in total; a few lateral-tagged images are dropped). $C_2$ is trained and tested on them with 5-fold patient-disjoint cross-validation, so every image is a test image exactly once. Threshold: $C_0$'s operating threshold, maximising Youden's $J$ on the selection set. Errors: images $C_0$ misclassifies at that threshold (FP $+$ FN), as a count and as a percentage of Images.
+\end{tablenotes}
+\end{threeparttable}
+\end{table}

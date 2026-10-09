@@ -1,0 +1,26 @@
+\begin{table}[htbp]
+\centering
+\small
+\caption{The data split, per disease: all labelled images, split into the images used to build the disease classifier $C_0$ (DenseNet-121, multi-label, U-Ignore), and the held-out images, never seen by $C_0$, on which $C_2$ is trained and tested. AUROC is that of $C_0$.}
+\label{tab:c0_split}
+\begin{threeparttable}
+\begin{tabular}{lrr|rrc|rrc}
+\toprule
+& \multicolumn{2}{c|}{All (before split)} & \multicolumn{3}{c|}{$C_0$ data (train + selection)} & \multicolumn{3}{c}{Held-out set ($C_2$ train + test)} \\
+\cmidrule(lr){2-3} \cmidrule(lr){4-6} \cmidrule(l){7-9}
+Disease & Images & Pos.\ (\%) & Images & Pos.\ (\%) & AUROC & Images & Pos.\ (\%) & AUROC \\
+\midrule
+Atelectasis & $161{,}156$ & $18.4$ & $80{,}218$ & $18.2$ & $0.712$ & $80{,}938$ & $18.6$ & $0.715$ \\
+Cardiomegaly & $184{,}312$ & $12.7$ & $91{,}805$ & $12.9$ & $0.869$ & $92{,}507$ & $12.5$ & $0.867$ \\
+Consolidation & $166{,}637$ & $7.8$ & $82{,}949$ & $7.8$ & $0.744$ & $83{,}688$ & $7.8$ & $0.736$ \\
+Edema & $179{,}199$ & $27.7$ & $89{,}347$ & $27.7$ & $0.851$ & $89{,}852$ & $27.8$ & $0.847$ \\
+Effusion & $181{,}440$ & $42.4$ & $90{,}506$ & $42.5$ & $0.882$ & $90{,}934$ & $42.2$ & $0.884$ \\
+\midrule
+Mean & -- & -- & -- & -- & $0.812$ & -- & -- & $0.810$ \\
+\bottomrule
+\end{tabular}
+\begin{tablenotes}\footnotesize
+\item Images: confidently labelled images for that disease; uncertain labels are masked, so counts differ by disease. Positive rate and AUROC on those images only. $C_0$ AUROC on the $C_0$ side is measured on the selection set ($9{,}528$ images), which is used for early stopping and the operating threshold but not for gradient updates. $C_0$ side: $95{,}192$ images ($85{,}664$ training + $9{,}528$ selection); held-out set: $95{,}835$ images. The two are patient-disjoint; frontal views only. All: the two sides added up.
+\end{tablenotes}
+\end{threeparttable}
+\end{table}

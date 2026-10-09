@@ -1,0 +1,32 @@
+\begin{table}[htbp]
+\centering
+\small
+\caption{AUROC for predicting C0 correctness with ensembles of the attribute model (MLP, I+Cf+D) and the CNN (Dual+S), using KNN counterfactuals and $K \in \{1,5,10\}$. Both members use the same $K$. Values are mean $\pm$ std over 5 CV folds. Mean: average of the probabilities; Rank: average of within-fold percentile ranks; LR: logistic-regression stacking fitted leave-one-fold-out.}
+\label{tab:ens_knn_k}
+\begin{tabular}{llc|ccc}
+\toprule
+Disease & $K$ & Adjusted MSP & Mean & Rank & LR \\
+\midrule
+\multirow{3}{*}{Atelectasis} & 1 & \multirow{3}{*}{$\mathbf{0.863} \pm 0.004$} & $0.859 \pm 0.005$ {\scriptsize$(+0.002)$} & $0.860 \pm 0.005$ {\scriptsize$(+0.002)$} & $0.860 \pm 0.005$ {\scriptsize$(+0.002)$} \\
+ & 5 &  & $0.862 \pm 0.005$ {\scriptsize$(+0.000)$} & $0.862 \pm 0.005$ {\scriptsize$(+0.001)$} & $0.862 \pm 0.005$ {\scriptsize$(+0.001)$} \\
+ & 10 &  & $0.862 \pm 0.005$ {\scriptsize$(+0.000)$} & $0.862 \pm 0.005$ {\scriptsize$(+0.001)$} & $0.863 \pm 0.005$ {\scriptsize$(+0.001)$} \\
+\midrule
+\multirow{3}{*}{Cardiomegaly} & 1 & \multirow{3}{*}{$0.917 \pm 0.002$} & $0.919 \pm 0.003$ {\scriptsize$(+0.004)$} & $\mathbf{0.919} \pm 0.003$ {\scriptsize$(+0.004)$} & $0.919 \pm 0.003$ {\scriptsize$(+0.004)$} \\
+ & 5 &  & $0.920 \pm 0.003$ {\scriptsize$(+0.002)$} & $0.920 \pm 0.003$ {\scriptsize$(+0.002)$} & $\mathbf{0.920} \pm 0.003$ {\scriptsize$(+0.002)$} \\
+ & 10 &  & $0.920 \pm 0.003$ {\scriptsize$(+0.002)$} & $0.921 \pm 0.003$ {\scriptsize$(+0.002)$} & $\mathbf{0.921} \pm 0.003$ {\scriptsize$(+0.002)$} \\
+\midrule
+\multirow{3}{*}{Consolidation} & 1 & \multirow{3}{*}{$\mathbf{0.946} \pm 0.003$} & $0.944 \pm 0.002$ {\scriptsize$(+0.001)$} & $0.944 \pm 0.002$ {\scriptsize$(+0.001)$} & $0.944 \pm 0.002$ {\scriptsize$(+0.001)$} \\
+ & 5 &  & $0.945 \pm 0.002$ {\scriptsize$(+0.000)$} & $0.945 \pm 0.002$ {\scriptsize$(+0.001)$} & $0.945 \pm 0.002$ {\scriptsize$(+0.000)$} \\
+ & 10 &  & $0.945 \pm 0.002$ {\scriptsize$(+0.001)$} & $0.945 \pm 0.002$ {\scriptsize$(+0.001)$} & $0.945 \pm 0.002$ {\scriptsize$(+0.001)$} \\
+\midrule
+\multirow{3}{*}{Edema} & 1 & \multirow{3}{*}{$0.830 \pm 0.004$} & $0.834 \pm 0.003$ {\scriptsize$(+0.005)$} & $\mathbf{0.834} \pm 0.003$ {\scriptsize$(+0.005)$} & $0.834 \pm 0.003$ {\scriptsize$(+0.005)$} \\
+ & 5 &  & $0.837 \pm 0.003$ {\scriptsize$(+0.003)$} & $0.837 \pm 0.003$ {\scriptsize$(+0.003)$} & $\mathbf{0.837} \pm 0.003$ {\scriptsize$(+0.003)$} \\
+ & 10 &  & $0.837 \pm 0.003$ {\scriptsize$(+0.003)$} & $0.837 \pm 0.003$ {\scriptsize$(+0.003)$} & $\mathbf{0.837} \pm 0.003$ {\scriptsize$(+0.003)$} \\
+\midrule
+\multirow{3}{*}{Effusion} & 1 & \multirow{3}{*}{$0.782 \pm 0.005$} & $0.786 \pm 0.005$ {\scriptsize$(+0.008)$} & $\mathbf{0.786} \pm 0.005$ {\scriptsize$(+0.008)$} & $0.786 \pm 0.005$ {\scriptsize$(+0.008)$} \\
+ & 5 &  & $0.787 \pm 0.005$ {\scriptsize$(+0.005)$} & $0.787 \pm 0.005$ {\scriptsize$(+0.005)$} & $\mathbf{0.787} \pm 0.005$ {\scriptsize$(+0.005)$} \\
+ & 10 &  & $0.787 \pm 0.005$ {\scriptsize$(+0.005)$} & $0.787 \pm 0.005$ {\scriptsize$(+0.005)$} & $\mathbf{0.787} \pm 0.005$ {\scriptsize$(+0.005)$} \\
+\bottomrule
+\end{tabular}
+\par\smallskip\footnotesize In parentheses: the gain in mean AUROC over the better of the two members at the same $K$ (members as in Tables~\ref{tab:attr_knn_k} and~\ref{tab:cnn_knn_k}). Adjusted MSP does not depend on $K$ and is shown once per disease.
+\end{table}

@@ -1,0 +1,22 @@
+C0 says consolidation (p = 0.12)  →  counterfactual p = 0.04  →  group C  →  C2 score lower than 93% of all calls
+Cases like this one: 91 in 100 consolidation calls are false positives, vs 84 in 100 for other positive calls
+Classifier = C0 (FP). b = counterfactual. g: ▼ C2 percentile 7%, △ MSP percentile 22%, among all calls
+At 80% coverage (the 20% least trusted calls in its fold deferred): C2 deferred, MSP accepted
+This global cut defers 48% of positive calls with C2 (48% with MSP), not a fixed 20%
+
+disease: consolidation
+cf source: knn_correct_cf
+side: positive calls
+group: group C
+outcome: FP (false positive)
+coverage: 80%
+rank scope: all
+C2 rank: 0.070
+MSP rank: 0.221
+C0 p (image): 0.1158
+C0 p (counterfactual): 0.0389
+row: 80772
+fold: 4
+image: CheXpert-v1.0-small/train/patient44338/study4/view1_frontal.jpg
+counterfactual: CheXpert-v1.0-small/train/patient44915/study1/view1_frontal.jpg
+similar members (e): CheXpert-v1.0-small/train/patient44392/study7/view1_frontal.jpg, CheXpert-v1.0-small/train/patient56201/study3/view1_frontal.jpg, CheXpert-v1.0-small/train/patient37531/study1/view1_frontal.jpg, CheXpert-v1.0-small/train/patient59143/study1/view1_frontal.jpg

@@ -1,0 +1,32 @@
+\begin{table}[htbp]
+\centering
+\small
+\caption{Our method against the adjusted MSP and three prior-art failure predictors at $K=10$ (KNN counterfactuals), for predicting C0 correctness. Mean $\pm$ std over 5 CV folds.}
+\label{tab:baselines_knn}
+\begin{threeparttable}
+\begin{tabular}{ll|c|ccc|c}
+\toprule
+ & Disease & Adjusted MSP & ConfidNet & TrustScore & SCCE & Ours \\
+\midrule
+\multirow{6}{*}{AUROC $\uparrow$} & Atelectasis & $\mathbf{0.863} \pm 0.004$ & $0.835 \pm 0.005$ & $0.829 \pm 0.003$ & $0.538 \pm 0.002$ & $0.863 \pm 0.005$ \\
+ & Cardiomegaly & $0.917 \pm 0.002$ & $0.905 \pm 0.002$ & $0.891 \pm 0.003$ & $0.586 \pm 0.005$ & $\mathbf{0.921} \pm 0.003^{**}$ \\
+ & Consolidation & $\mathbf{0.946} \pm 0.003$ & $0.928 \pm 0.002$ & $0.936 \pm 0.003$ & $0.539 \pm 0.007$ & $0.945 \pm 0.002$ \\
+ & Edema & $0.830 \pm 0.004$ & $0.820 \pm 0.003$ & $0.782 \pm 0.004$ & $0.508 \pm 0.004$ & $\mathbf{0.837} \pm 0.003^{**}$ \\
+ & Effusion & $0.782 \pm 0.005$ & $0.785 \pm 0.006$ & $0.726 \pm 0.006$ & $0.470 \pm 0.005$ & $\mathbf{0.787} \pm 0.005^{**}$ \\
+\cmidrule(l){2-7}
+ & \textit{Mean} & $0.868 \pm 0.002$ & $0.855 \pm 0.001$ & $0.833 \pm 0.001$ & $0.528 \pm 0.003$ & $\mathbf{0.871} \pm 0.002^{**}$ \\
+\midrule
+\multirow{6}{*}{E-AURC $\downarrow$} & Atelectasis & $0.0630 \pm 0.0022$ & $0.0728 \pm 0.0023$ & $0.0807 \pm 0.0015$ & $0.2714 \pm 0.0029$ & $\mathbf{0.0628} \pm 0.0022$ \\
+ & Cardiomegaly & $0.0209 \pm 0.0012$ & $0.0232 \pm 0.0012$ & $0.0286 \pm 0.0018$ & $0.1331 \pm 0.0053$ & $\mathbf{0.0200} \pm 0.0013^{**}$ \\
+ & Consolidation & $\mathbf{0.0229} \pm 0.0012$ & $0.0286 \pm 0.0011$ & $0.0275 \pm 0.0018$ & $0.2821 \pm 0.0053$ & $0.0230 \pm 0.0010$ \\
+ & Edema & $0.0518 \pm 0.0018$ & $0.0548 \pm 0.0019$ & $0.0674 \pm 0.0020$ & $0.2165 \pm 0.0052$ & $\mathbf{0.0493} \pm 0.0015^{**}$ \\
+ & Effusion & $0.0588 \pm 0.0018$ & $0.0574 \pm 0.0020$ & $0.0756 \pm 0.0020$ & $0.1968 \pm 0.0048$ & $\mathbf{0.0569} \pm 0.0018^{**}$ \\
+\cmidrule(l){2-7}
+ & \textit{Mean} & $0.0435 \pm 0.0006$ & $0.0473 \pm 0.0005$ & $0.0560 \pm 0.0003$ & $0.2200 \pm 0.0016$ & $\mathbf{0.0424} \pm 0.0007^{***}$ \\
+\bottomrule
+\end{tabular}
+\begin{tablenotes}\footnotesize
+\item ConfidNet: MLP on C0's frozen penultimate features trained to regress the threshold-adapted true-class probability. TrustScore: distance to the nearest training points of the other class divided by that to the predicted class, after density filtering. SCCE: L1 distance to the nearest of our own counterfactuals in the retrieval's standardised attribute space. Ours: the ensemble of the attribute model and the CNN. Bold: the best method per row. Stars on ours: paired patient-level bootstrap against the adjusted MSP (5000 replicates), Holm-adjusted across the five diseases; for the Mean row the test of the five-disease average; ***~$p_{adj} < 0.001$, **~$p_{adj} < 0.01$, *~$p_{adj} < 0.05$; no star: not significant. Ours is significantly better than ConfidNet, TrustScore and SCCE in every row (paired bootstrap, Holm-adjusted, Table~\ref{tab:baselines_tests_knn}). Mean: average over the five diseases; its std is over folds of the fold-wise five-disease average.
+\end{tablenotes}
+\end{threeparttable}
+\end{table}

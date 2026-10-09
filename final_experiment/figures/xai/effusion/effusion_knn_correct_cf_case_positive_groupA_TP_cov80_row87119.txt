@@ -1,0 +1,22 @@
+C0 says effusion (p = 0.97)  →  counterfactual p = 0.05  →  group A  →  C2 score higher than 76% of all calls
+Cases like this one: 6 in 100 effusion calls are false positives, vs 33 in 100 for other positive calls
+Classifier = C0 (TP). b = counterfactual. g: ▼ C2 percentile 76%, △ MSP percentile 80%, among all calls
+At 80% coverage (the 20% least trusted calls in its fold deferred): C2 accepted, MSP accepted
+This global cut defers 38% of positive calls with C2 (34% with MSP), not a fixed 20%
+
+disease: effusion
+cf source: knn_correct_cf
+side: positive calls
+group: group A
+outcome: TP (true positive)
+coverage: 80%
+rank scope: all
+C2 rank: 0.762
+MSP rank: 0.798
+C0 p (image): 0.9658
+C0 p (counterfactual): 0.0524
+row: 87119
+fold: 4
+image: CheXpert-v1.0-small/train/patient42928/study1/view1_frontal.jpg
+counterfactual: CheXpert-v1.0-small/train/patient42202/study1/view1_frontal.jpg
+similar members (e): CheXpert-v1.0-small/train/patient34510/study2/view1_frontal.jpg, CheXpert-v1.0-small/train/patient18988/study4/view1_frontal.jpg, CheXpert-v1.0-small/train/patient20479/study10/view1_frontal.jpg, CheXpert-v1.0-small/train/patient21257/study6/view1_frontal.jpg

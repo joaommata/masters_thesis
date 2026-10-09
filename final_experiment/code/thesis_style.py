@@ -7,15 +7,19 @@
 Colour encodes the model FAMILY, and nothing else gets a hue:
 
     attributes  blue     FAMILY["attr"]
-    CNNs        teal     FAMILY["cnn"]
-    trajectory  orange   FAMILY["traj"]      (diffusion-CF levels arm)
-    ensemble    ink-grey ENS                 (a mix of families, so no hue of its own)
+    CNNs        red      FAMILY["cnn"]
+    trajectory  green    FAMILY["traj"]      (diffusion-CF levels arm)
+    ensemble    purple   ENS                 (attributes + CNNs: blue + red)
     MSP         light grey, dashed           (the reference, never a series)
 
-The three family hues were checked with the dataviz palette validator (all pairs, light
-surface): colour-vision-deficiency separation dE >= 12.0, normal-vision dE >= 18.9, all
-inside the lightness band and above the chroma floor. A fourth hue failed every
-candidate, which is why the ensemble is neutral and "below MSP" is drawn hollow, not red.
+The hues follow the methods figure (attribute models blue, image models red, trajectory
+models green). Red and green are the classic colour-blind confusion, so they are separated
+by LIGHTNESS, not hue: the CNN red is dark (OKLCH L 0.50), the trajectory green light
+(L 0.68). The ensemble purple (L 0.62, hue 300) is as dark and as blue as it can go while
+staying apart from the attribute blue it is always drawn next to. Checked with the dataviz
+palette validator's OKLab / Machado metrics, all four pairwise on a white surface:
+colour-vision-deficiency separation dE >= 8.7 (attr-ensemble; every other pair >= 14),
+normal-vision dE >= 16.2. "Below MSP" is still drawn hollow, not coloured.
 
 Lightness encodes HOW MUCH COUNTERFACTUAL a model sees, within a family:
 
@@ -32,22 +36,23 @@ MM   = 1 / 25.4                    # figsize is in inches; write sizes as 60 * M
 FULL = 183 * MM                    # Nature double column
 HALF = 89 * MM                     # Nature single column
 
-FAMILY = {"attr": "#2863AB", "cnn": "#0F9B89", "traj": "#D67523"}
+FAMILY = {"attr": "#2863AB", "cnn": "#B02B27", "traj": "#54B05A"}
 FAMILY_LABEL = {"attr": "attributes", "cnn": "CNN", "traj": "trajectory"}
-# Same hues, OKLCH lightness stepped by ~0.2, light -> dark. Wide steps because the lines
+# Same hues, OKLCH lightness 0.76 / 0.55 / 0.34 in every family, light -> dark. Wide steps because the lines
 # they colour overlap; K_MARKER adds a shape so the steps never carry identity alone.
 RAMP = {"attr": ["#7CB4FC", "#3772BB", "#02376F"],
-        "cnn":  ["#49DFC7", "#0F9B89", "#045A4F"],
-        "traj": ["#FEB98B", "#D3721E", "#854408"]}
+        "cnn":  ["#F49287", "#C13C36", "#691211"],
+        "traj": ["#81D584", "#3A9742", "#1D5522"]}
 K_MARKER = ["o", "s", "D"]         # paired with the ramp steps, light -> dark
-TINT = {"attr": "#D5E6FC", "cnn": "#CDEDE5", "traj": "#F8DFCF"}
+TINT = {"attr": "#D5E6FC", "cnn": "#FFE0DB", "traj": "#D9F4D9"}
 
-ENS   = "#8F69A3"                  # ensembles: a combination of families, so neutral
+ENS   = "#956ED2"                  # ensembles: attributes + CNNs, so blue + red = purple
 GREY  = "#BFBFBF"                  # MSP reference line -- thin, light grey, dashed
 INK   = "#1A1A1A"                  # text, axes, whiskers
 MUTED = "#6B6B6B"                  # secondary text
 HAIR  = "#E6E6E6"                  # gridlines, separators
 SHADE = "#F2F2F2"                  # background band for no-counterfactual models
+PRIOR = "#4D4D4D"                  # prior-art no-CF baselines: ConfidNet filled, TrustScore open
 
 # Type scale (pt). Everything is drawn at final size, so these are the printed sizes.
 FS = {"tiny": 5.5, "small": 6, "base": 7, "title": 7.5, "head": 8}
@@ -122,6 +127,6 @@ def apply():
     })
 
 
-__all__ = ["MM", "FULL", "HALF", "FAMILY", "FAMILY_LABEL", "RAMP", "K_MARKER", "TINT", "ENS", "GREY",
+__all__ = ["MM", "FULL", "HALF", "FAMILY", "FAMILY_LABEL", "RAMP", "K_MARKER", "TINT", "ENS", "GREY", "PRIOR",
            "INK", "MUTED", "HAIR", "SHADE", "FS", "LW", "k_colors", "k_markers", "msp_line", "msp_handle",
            "line_handle", "patch_handle", "panel_letter", "apply"]

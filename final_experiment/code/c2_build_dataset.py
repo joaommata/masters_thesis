@@ -56,6 +56,8 @@ import pandas as pd
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 FE = os.path.join(REPO, "final_experiment")
 RESULTS_DIR = os.environ.get("THESIS_RESULTS", "/work3/s251710/thesis_results")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from c0_arch import n_emb                                       # noqa: E402
 
 # Written by c0_final_predictions.py; the raw label and its certainty flag.
 DROP_FROM_C0 = ["label_raw", "certain"]
@@ -73,7 +75,8 @@ DROP_FROM_ATTR = ["Path", "Sex", "Age", "Frontal/Lateral", "AP/PA"] + CHEXPERT_L
 # Legacy table whose attribute space the output must reproduce exactly.
 LEGACY_REFERENCE = os.path.join(RESULTS_DIR, "C2_custom", "effusion", "c2_data.csv")
 N_ATTRS_EXPECTED = 454
-N_EMB_EXPECTED = 1024
+# 1024 for the DenseNet C0; other backbones in their own arch root (c0_arch.py).
+N_EMB_EXPECTED = n_emb(RESULTS_DIR)
 
 
 def main():
@@ -92,7 +95,7 @@ def main():
                    help="keep rows whose C0 correctness is undefined (see below). "
                         "Off by default: they have no C2 target.")
     p.add_argument("--float32", action="store_true", default=True,
-                   help="store the 1024 embeddings as float32 (default: on)")
+                   help="store the embeddings as float32 (default: on)")
     p.add_argument("--no-check-legacy", action="store_true",
                    help="skip the attribute-space comparison against the legacy table")
     args = p.parse_args()

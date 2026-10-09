@@ -1,0 +1,22 @@
+C0 says cardiomegaly (p = 0.87)  →  counterfactual p = 0.03  →  group A  →  C2 score lower than 71% of all calls
+Cases like this one: 37 in 100 cardiomegaly calls are false positives, vs 74 in 100 for other positive calls
+Classifier = C0 (TP). b = counterfactual. g: ▼ C2 percentile 29%, △ MSP percentile 27%, among all calls
+At 80% coverage (the 20% least trusted calls in its fold deferred): C2 accepted, MSP accepted
+This global cut defers 76% of positive calls with C2 (76% with MSP), not a fixed 20%
+
+disease: cardiomegaly
+cf source: knn_correct_cf
+side: positive calls
+group: group A
+outcome: TP (true positive)
+coverage: 80%
+rank scope: all
+C2 rank: 0.287
+MSP rank: 0.273
+C0 p (image): 0.8657
+C0 p (counterfactual): 0.0257
+row: 77386
+fold: 4
+image: CheXpert-v1.0-small/train/patient10497/study2/view1_frontal.jpg
+counterfactual: CheXpert-v1.0-small/train/patient35793/study3/view1_frontal.jpg
+similar members (e): CheXpert-v1.0-small/train/patient12705/study1/view1_frontal.jpg, CheXpert-v1.0-small/train/patient60639/study1/view1_frontal.jpg, CheXpert-v1.0-small/train/patient48301/study1/view1_frontal.jpg, CheXpert-v1.0-small/train/patient38024/study4/view1_frontal.jpg

@@ -1,0 +1,25 @@
+\begin{table}[htbp]
+\centering
+\small
+\caption{The attribute model (I+Cf+D) against the CNN (Dual+S) at $K=10$ (KNN counterfactuals). AUROC for predicting C0 correctness, mean $\pm$ std over 5 CV folds.}
+\label{tab:attr_vs_cnn_knn}
+\begin{threeparttable}
+\begin{tabular}{lcc|r}
+\toprule
+& \multicolumn{1}{c}{Attribute model} & \multicolumn{1}{c|}{CNN} & \multicolumn{1}{c}{Attribute $-$ CNN} \\
+\cmidrule(lr){2-2} \cmidrule(lr){3-3} \cmidrule(l){4-4}
+Disease & I+Cf+D & Dual+S & $\Delta$ \\
+\midrule
+Atelectasis & $\mathbf{0.862} \pm 0.005$ & $0.856 \pm 0.006$ & $+0.0055^{**}$ \\
+Cardiomegaly & $\mathbf{0.919} \pm 0.003$ & $0.916 \pm 0.003$ & $+0.0026^{**}$ \\
+Consolidation & $\mathbf{0.945} \pm 0.003$ & $0.942 \pm 0.002$ & $+0.0023^{**}$ \\
+Edema & $\mathbf{0.834} \pm 0.004$ & $0.831 \pm 0.004$ & $+0.0030^{**}$ \\
+Effusion & $\mathbf{0.783} \pm 0.005$ & $0.778 \pm 0.005$ & $+0.0050^{**}$ \\
+Mean & $\mathbf{0.868}$ & $0.865$ & $+0.0037^{**}$ \\
+\bottomrule
+\end{tabular}
+\begin{tablenotes}\footnotesize
+\item Bold: the better model per row. $\Delta$: mean-fold AUROC of the attribute model minus that of the CNN. Stars: paired patient-level bootstrap of $\Delta$ (5000 replicates), Holm-adjusted across the five diseases; for the Mean row, the bootstrap of the five-disease average, Holm-adjusted across the nine comparisons of the thesis claims; ***~$p_{adj} < 0.001$, **~$p_{adj} < 0.01$, *~$p_{adj} < 0.05$; no star: not significant. Mean: average over the five diseases.
+\end{tablenotes}
+\end{threeparttable}
+\end{table}

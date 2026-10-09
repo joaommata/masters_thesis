@@ -79,7 +79,7 @@ def results_root(disease, source_name, cf_count):
                         f"cf_{cf_count}")
 
 
-def load_predictions(attr_root, cnn_root, n_folds, cnn_key):
+def load_predictions(attr_root, cnn_root, n_folds, cnn_key, attr_dir="attributes"):
     """Out-of-fold attribute and CNN predictions, joined on `path`.
 
     The two roots may be DIFFERENT K. That is safe, and the reason is that K
@@ -91,7 +91,7 @@ def load_predictions(attr_root, cnn_root, n_folds, cnn_key):
     """
     parts = []
     for i in range(n_folds):
-        p = os.path.join(attr_root, "attributes", f"fold_{i}_predictions.csv")
+        p = os.path.join(attr_root, attr_dir, f"fold_{i}_predictions.csv")
         if not os.path.exists(p):
             raise SystemExit(f"{p} not found -- run c2_train_attributes.py first")
         f = pd.read_csv(p)
@@ -168,7 +168,7 @@ def score_of(root, kind, key):
     p = os.path.join(root, kind, "cv_summary.csv")
     if os.path.exists(p):
         s = pd.read_csv(p)
-        if kind == "attributes":
+        if kind.startswith("attributes"):
             s = s[s["model"] != "baseline"]
             m = s["model"].astype(str) + "_" + s["config"].astype(str)
         else:
@@ -266,6 +266,12 @@ def per_fold_auc(df, scores, n_folds):
 def run(args):
     src = cf_source_from_args(args)
     root = results_root(args.disease, src.name, args.cf_count)
+    # --with-prob: the attribute side comes from attributes_prob/ (c2_train_attributes.py
+    # --with-prob) and the result goes to ensemble_prob/, beside the probability-free run.
+    attr_kind = "attributes_prob" if args.with_prob else "attributes"
+    if args.with_prob and (args.search_k or not args.attr_model):
+        raise SystemExit("--with-prob needs an explicit --attr-model and no --search-k: "
+                         "attributes_prob/ holds one config at one K")
 
     # --search-k lets each family choose its own K. Without it the run is
     # pinned to --cf-count on both sides, which is the old behaviour.
@@ -278,7 +284,7 @@ def run(args):
         attr_k = args.cf_count
         attr_key = args.attr_model or pick_best(root, "attributes")
         attr_auc = score_of(results_root(args.disease, src.name, attr_k),
-                            "attributes", attr_key)
+                            attr_kind, attr_key)
 
     if ks and not args.cnn_model:
         cnn_key, cnn_k, cnn_auc = pick_best_over_k(
@@ -304,7 +310,7 @@ def run(args):
         print(f"  the two families peak at different K; folds are shared across "
               f"K, so the join stays out-of-fold")
 
-    df = load_predictions(attr_root, cnn_root, args.n_folds, cnn_key)
+    df = load_predictions(attr_root, cnn_root, args.n_folds, cnn_key, attr_kind)
     a, b = f"{attr_key}_prob", f"{cnn_key}_prob"
     for c in (a, b):
         if c not in df.columns:
@@ -340,7 +346,8 @@ def run(args):
     # the larger of the two rather than silently overwriting a same-K result that
     # was produced under the old fixed-K protocol.
     out_dir = os.path.join(results_root(args.disease, src.name,
-                                        max(attr_k, cnn_k)), "ensemble")
+                                        max(attr_k, cnn_k)),
+                           "ensemble_prob" if args.with_prob else "ensemble")
     os.makedirs(out_dir, exist_ok=True)
     out.to_csv(os.path.join(out_dir, "ensemble_summary.csv"), index=False)
 
@@ -355,7 +362,7 @@ def run(args):
                    # Each family's own K, so a mixed-K run is self-describing and
                    # the notebook never has to infer which K a column came from.
                    "attr_cf_count": attr_k, "cnn_cf_count": cnn_k,
-                   "k_searched": ks,
+                   "k_searched": ks, "with_prob": bool(args.with_prob),
                    "methods": methods,
                    "n_rows": int(len(df))}, fh, indent=2)
 
@@ -385,6 +392,9 @@ def main():
                          "out-of-fold; results are written under the larger K. "
                          "An explicit --attr-model/--cnn-model still pins that "
                          "side to --cf-count.")
+    ap.add_argument("--with-prob", action="store_true",
+                    help="read the attribute model from attributes_prob/ and write to "
+                         "ensemble_prob/ (needs --attr-model, e.g. MLP_I+C+D+P)")
     add_cf_args(ap)
     run(ap.parse_args())
 

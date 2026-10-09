@@ -16,6 +16,9 @@ if [[ ${#DISEASES[@]} -eq 0 ]]; then
 fi
 ARMS="${ARMS:-knn:}"
 KS="${KS:-1 5 10}"
+# Fixed members, so every (disease, arm, K) ensembles the same two models.
+ATTR_MODEL="${ATTR_MODEL:-MLP_I+C+D}"
+CNN_MODEL="${CNN_MODEL:-dual_sal}"
 
 for d in "${DISEASES[@]}"; do
     for arm in $ARMS; do
@@ -26,6 +29,7 @@ for d in "${DISEASES[@]}"; do
             echo "################  $d  $src${sub:+/$sub}  K=$k  ################"
             python c2_ensemble.py --disease "$d" --cf-source "$src" \
                 --cf-count "$k" ${sub:+--subset "$sub"} \
+                --attr-model "$ATTR_MODEL" --cnn-model "$CNN_MODEL" \
                 || echo "  SKIPPED: $d $src${sub:+/$sub} K=$k"
         done
     done

@@ -1,0 +1,1 @@
+PSPNet (chestx_det) masks for one random C2_dataset image, thresholded at 0.5, shaded with an outline. Panel titles are shortened: Left hilum = Left Hilus Pulmonis, Right hilum = Right Hilus Pulmonis, Diaphragm = Facies Diaphragmatica. Image: CheXpert-v1.0-small/train/patient31123/study1/view1_frontal.jpg.

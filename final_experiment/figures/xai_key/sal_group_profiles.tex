@@ -1,0 +1,46 @@
+\begin{table}[htbp]
+\centering
+\footnotesize
+\caption{Saliency profiles of the groups in the CNN's embedding, per disease and side of $C_0$'s call: group means of the log focus of the Grad-CAM supporting $C_0$'s call (Sup.) and of the one against it (Ag.), on the side's key regions, in standard deviations (KNN counterfactuals, fold 4).}
+\label{tab:sal_group_profiles}
+\begin{threeparttable}
+\begin{tabular}{lll|cc|cc|cc}
+\toprule
+& & & \multicolumn{2}{c|}{Group A} & \multicolumn{2}{c|}{Group B} & \multicolumn{2}{c}{Group C} \\
+\cmidrule(lr){4-5} \cmidrule(lr){6-7} \cmidrule(lr){8-9}
+Disease & $C_0$'s call &  & Sup. & Ag. & Sup. & Ag. & Sup. & Ag. \\
+\midrule
+\multirow{12}{*}{Cardiomegaly} & \multirow{6}{*}{\shortstack[l]{Positive\\$64.2\%$ wrong}} & \textit{wrong ($n$)} & \multicolumn{2}{c|}{$38.4\%$ ($734$)} & \multicolumn{2}{c|}{$70.0\%$ ($1{,}246$)} & \multicolumn{2}{c}{$81.5\%$ ($502$)} \\
+ &  & Hila & $+0.02$ & $-0.57$ & $+0.12$ & $-0.01$ & $-0.23$ & $+0.85$ \\
+ &  & Heart & $-0.22$ & $-0.58$ & $+0.21$ & $-0.12$ & $-0.03$ & $+0.92$ \\
+ &  & Left lung lower & $+0.04$ & $-0.56$ & $+0.08$ & $+0.03$ & $-0.09$ & $+0.58$ \\
+ &  & Right lung lower & $+0.15$ & $-0.40$ & $+0.13$ & $-0.01$ & $-0.42$ & $+0.39$ \\
+ &  & Outside & $+0.28$ & $+0.66$ & $-0.06$ & $-0.09$ & $-0.14$ & $-0.73$ \\
+\cmidrule(l){2-9}
+ & \multirow{6}{*}{\shortstack[l]{Negative\\$4.2\%$ wrong}} & \textit{wrong ($n$)} & \multicolumn{2}{c|}{$1.9\%$ ($1{,}850$)} & \multicolumn{2}{c|}{$2.4\%$ ($2{,}903$)} & \multicolumn{2}{c}{$7.8\%$ ($2{,}179$)} \\
+ &  & Hila & $+0.39$ & $-0.61$ & $+0.20$ & $-0.43$ & $-0.61$ & $+0.20$ \\
+ &  & Heart--left lung overlap & $+0.39$ & $-0.78$ & $+0.19$ & $-0.36$ & $-0.65$ & $+0.19$ \\
+ &  & Mediastinum & $+0.35$ & $-0.69$ & $+0.13$ & $-0.47$ & $-0.47$ & $+0.21$ \\
+ &  & Right lung lower & $+0.14$ & $-0.25$ & $+0.14$ & $-0.26$ & $-0.24$ & $+0.10$ \\
+ &  & Outside & $-0.47$ & $+0.39$ & $-0.19$ & $+0.30$ & $+0.65$ & $-0.13$ \\
+\midrule
+\multirow{12}{*}{Effusion} & \multirow{6}{*}{\shortstack[l]{Positive\\$28.8\%$ wrong}} & \textit{wrong ($n$)} & \multicolumn{2}{c|}{$7.8\%$ ($915$)} & \multicolumn{2}{c|}{$21.1\%$ ($1{,}395$)} & \multicolumn{2}{c}{$42.3\%$ ($2{,}126$)} \\
+ &  & Right lung lower & $+0.66$ & $-0.78$ & $+0.24$ & $-0.17$ & $-0.48$ & $+0.34$ \\
+ &  & Hila & $+0.59$ & $-1.02$ & $+0.34$ & $-0.22$ & $-0.45$ & $+0.36$ \\
+ &  & Spine & $+0.42$ & $-1.04$ & $+0.20$ & $-0.33$ & $-0.33$ & $+0.44$ \\
+ &  & Heart & $+0.26$ & $-0.78$ & $+0.27$ & $-0.38$ & $-0.28$ & $+0.39$ \\
+ &  & Outside & $-0.47$ & $+0.31$ & $-0.19$ & $+0.07$ & $+0.33$ & $-0.07$ \\
+\cmidrule(l){2-9}
+ & \multirow{6}{*}{\shortstack[l]{Negative\\$12.3\%$ wrong}} & \textit{wrong ($n$)} & \multicolumn{2}{c|}{$2.2\%$ ($1{,}693$)} & \multicolumn{2}{c|}{$10.9\%$ ($1{,}528$)} & \multicolumn{2}{c}{$26.6\%$ ($1{,}298$)} \\
+ &  & Diaphragm & $+0.39$ & $-0.65$ & $+0.14$ & $-0.26$ & $-0.72$ & $+0.94$ \\
+ &  & Heart & $+0.34$ & $-0.39$ & $+0.08$ & $-0.31$ & $-0.64$ & $+0.77$ \\
+ &  & Right lung lower & $-0.11$ & $-0.33$ & $+0.01$ & $-0.26$ & $+0.11$ & $+0.65$ \\
+ &  & Hila & $-0.13$ & $-0.28$ & $-0.01$ & $-0.16$ & $+0.17$ & $+0.46$ \\
+ &  & Outside & $-0.18$ & $+0.43$ & $+0.04$ & $+0.13$ & $+0.24$ & $-0.59$ \\
+\bottomrule
+\end{tabular}
+\begin{tablenotes}\footnotesize
+\item Groups: k-means ($k=3$) on the embedding of the CNN, per side of $C_0$'s call; A has the lowest error rate. Regions: the side's four non-redundant regions whose focus correlates most with correctness, and Outside (the image outside the body). Focus: share of the map in the region divided by the region's share of the image, as $\log_{10}$; values are group means, z-scored over all calls on that side (0 = an average call). First row of each side: the group's $C_0$ error rate and number of calls on the held-out half of fold 4 (the patient-disjoint half k-means was not fitted on); the profile values are means over the whole group. Side label: error rate over all of that side's fold-4 calls.
+\end{tablenotes}
+\end{threeparttable}
+\end{table}

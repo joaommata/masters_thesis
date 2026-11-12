@@ -12,6 +12,13 @@ Does not modify c2_prepare_data_simulated_cf.py or c2_cv_pipeline_new_split.py.
 """
 
 import numpy as np
+
+# Shared C0-derived exclusion list (margin + SDN internal-classifier probs)
+# — see c2_feature_spec for why these must not enter the attribute space.
+import os as _os_fs, sys as _sys_fs
+_sys_fs.path.append(_os_fs.path.dirname(_os_fs.path.abspath(__file__)))
+from c2_feature_spec import C0_DERIVED_COLS, RSNA_META_COLS
+
 import pandas as pd
 from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import StandardScaler
@@ -34,7 +41,8 @@ def compute_cf_for_split_correct_cf_emb(train_df, test_df, cf_count, disease, di
     test_df  = add_clinical_ratios(test_df.copy())
 
     meta_cols = {disease_prob_col, disease_pred_col, disease_true_col,
-                 "correct", "path", "patient_id"}
+                 "correct", "path", "patient_id",
+                 *C0_DERIVED_COLS, *RSNA_META_COLS}
     emb_cols      = [c for c in train_df.columns if c.startswith("emb_")]
     relevant_cols = [c for c in train_df.columns if c not in meta_cols and c not in emb_cols]
 

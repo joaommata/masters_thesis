@@ -39,6 +39,13 @@ compute_cf_for_split_gt_routing:
 
 
 import os
+
+# Shared C0-derived exclusion list (margin + SDN internal-classifier probs)
+# — see c2_feature_spec for why these must not enter the attribute space.
+import os as _os_fs, sys as _sys_fs
+_sys_fs.path.append(_os_fs.path.dirname(_os_fs.path.abspath(__file__)))
+from c2_feature_spec import C0_DERIVED_COLS, RSNA_META_COLS
+
 import numpy as np
 import pandas as pd
 from sklearn.neighbors import NearestNeighbors
@@ -84,28 +91,72 @@ def _get_disease_cols(disease):
 disease_prob_col, disease_pred_col, disease_true_col = _get_disease_cols(DISEASE)
 
 
+def _ratio(num, den):
+    """num / den, NaN wherever den is zero, negative or missing.
+
+    A zero denominator means the segmenter returned an EMPTY MASK for that
+    structure, so the ratio is undefined. It is not a large number.
+
+    The previous guard added 1e-6 to every denominator to avoid a divide-by-zero
+    warning, which silently turned "undefined" into "num x 1e6" -- and every
+    consumer standardises these columns against the training distribution, where
+    the ratio is ~1. On generated counterfactuals, whose segmentations degenerate
+    far more often than real radiographs', two such rows in 20,000 pushed
+    lung_height_ratio to 1.75e8 and its scaled delta to 41,000 standard
+    deviations, which is enough on its own to dominate every attribute model that
+    reads the delta block.
+
+    NaN is the right answer because every downstream consumer already handles it:
+    the attribute frame fills missing attributes with 0 after this function runs,
+    so an unmeasurable structure contributes nothing instead of contributing
+    everything.
+    """
+    return num / den.where(den > 0)
+
+
+def repair_bbox_ratios(df):
+    """Recompute every <structure>_bbox_ratio from its stored width and height.
+
+    c1_build_attribute_vector.py wrote `width / (height + 1e-6)`, so a bounding
+    box one pixel tall -- height is exactly 0 -- came out as width x 1e6. The
+    tables already on disk carry those values and re-extracting them is hours of
+    GPU per disease, but the repair is exact: both `_bbox_width` and
+    `_bbox_height` are stored next to the ratio, so it can simply be recomputed,
+    NaN where it is undefined.
+
+    Applied to every frame the same way, so queries and counterfactuals are
+    treated identically -- which is the point, since only counterfactuals
+    produce degenerate masks often enough for it to matter.
+    """
+    for col in [c for c in df.columns if c.endswith("_bbox_ratio")]:
+        st = col[: -len("_bbox_ratio")]
+        w, h = f"{st}_bbox_width", f"{st}_bbox_height"
+        if w in df.columns and h in df.columns:
+            df[col] = _ratio(df[w], df[h])
+    return df
+
+
 def add_clinical_ratios(df):
     df = df.copy()
+    df = repair_bbox_ratios(df)
+
+    lung_width = df["Left Lung_bbox_width"] + df["Right Lung_bbox_width"]
+    total_area = df["Left Lung_area_pixels"] + df["Right Lung_area_pixels"]
 
     # Cardiothoracic ratio - most important for cardiomegaly. Normal < 0.5
-    df["cardiothoracic_ratio"] = df["Heart_bbox_width"] / (
-        df["Left Lung_bbox_width"] + df["Right Lung_bbox_width"]
-    )
+    df["cardiothoracic_ratio"] = _ratio(df["Heart_bbox_width"], lung_width)
 
     # Lung symmetry - asymmetry can indicate effusion or pneumothorax
-    df["lung_area_ratio"] = df["Left Lung_area_pixels"] / (df["Right Lung_area_pixels"] + 1e-6)
-    df["lung_height_ratio"] = df["Left Lung_bbox_height"] / (df["Right Lung_bbox_height"] + 1e-6)
-    df["lung_width_ratio"] = df["Left Lung_bbox_width"] / (df["Right Lung_bbox_width"] + 1e-6)
+    df["lung_area_ratio"]   = _ratio(df["Left Lung_area_pixels"], df["Right Lung_area_pixels"])
+    df["lung_height_ratio"] = _ratio(df["Left Lung_bbox_height"], df["Right Lung_bbox_height"])
+    df["lung_width_ratio"]  = _ratio(df["Left Lung_bbox_width"], df["Right Lung_bbox_width"])
 
     # Lung area relative to total - captures hyperinflation/collapse
-    total_area = df["Left Lung_area_pixels"] + df["Right Lung_area_pixels"]
-    df["left_lung_fraction"] = df["Left Lung_area_pixels"] / (total_area + 1e-6)
-    df["right_lung_fraction"] = df["Right Lung_area_pixels"] / (total_area + 1e-6)
+    df["left_lung_fraction"]  = _ratio(df["Left Lung_area_pixels"], total_area)
+    df["right_lung_fraction"] = _ratio(df["Right Lung_area_pixels"], total_area)
 
     # Mediastinal width relative to lung width - widens in effusion/cardiomegaly
-    df["mediastinal_ratio"] = df["Mediastinum_bbox_width"] / (
-        df["Left Lung_bbox_width"] + df["Right Lung_bbox_width"] + 1e-6
-    )
+    df["mediastinal_ratio"] = _ratio(df["Mediastinum_bbox_width"], lung_width)
 
     return df
 
@@ -197,7 +248,8 @@ def compute_cf_for_split_matched_train_unmatched_test(train_df, test_df, cf_coun
     test_df  = add_clinical_ratios(test_df.copy())
 
     meta_cols = {disease_prob_col, disease_pred_col, disease_true_col,
-                 "correct", "path", "cam_path", "patient_id"}
+                 "correct", "path", "cam_path", "patient_id",
+                 *C0_DERIVED_COLS, *RSNA_META_COLS}
     emb_cols  = [c for c in train_df.columns if c.startswith("emb_")]
     relevant_cols = [c for c in train_df.columns
                      if c not in meta_cols and c not in emb_cols]
@@ -327,7 +379,8 @@ def compute_cf_for_split_unmatched(train_df, test_df, cf_count, disease, distanc
     test_df  = add_clinical_ratios(test_df.copy())
 
     meta_cols = {disease_prob_col, disease_pred_col, disease_true_col,
-                 "correct", "path", "cam_path", "patient_id"}
+                 "correct", "path", "cam_path", "patient_id",
+                 *C0_DERIVED_COLS, *RSNA_META_COLS}
     emb_cols  = [c for c in train_df.columns if c.startswith("emb_")]
     relevant_cols = [c for c in train_df.columns
                      if c not in meta_cols and c not in emb_cols]
@@ -454,7 +507,8 @@ def compute_cf_for_split_further(train_df, test_df, cf_count, disease, distance=
     train_df = add_clinical_ratios(train_df.copy())
     test_df = add_clinical_ratios(test_df.copy())
 
-    meta_cols = {disease_prob_col, disease_pred_col, disease_true_col, "correct", "path", "cam_path", "patient_id"}
+    meta_cols = {disease_prob_col, disease_pred_col, disease_true_col, "correct", "path", "cam_path", "patient_id",
+                 *C0_DERIVED_COLS, *RSNA_META_COLS}
     emb_cols = [c for c in train_df.columns if c.startswith("emb_")]
     relevant_cols = [c for c in train_df.columns if c not in meta_cols and c not in emb_cols]
 
@@ -579,7 +633,8 @@ def compute_cf_for_split_correct_cf(train_df, test_df, cf_count, disease, distan
     test_df  = add_clinical_ratios(test_df.copy())
 
     meta_cols = {disease_prob_col, disease_pred_col, disease_true_col,
-                 "correct", "path", "cam_path", "patient_id"}
+                 "correct", "path", "cam_path", "patient_id",
+                 *C0_DERIVED_COLS, *RSNA_META_COLS}
     emb_cols  = [c for c in train_df.columns if c.startswith("emb_")]
     relevant_cols = [c for c in train_df.columns if c not in meta_cols and c not in emb_cols]
 
@@ -675,7 +730,8 @@ def compute_cf_for_split_gt_routing(train_df, test_df, cf_count, disease, distan
     test_df  = add_clinical_ratios(test_df.copy())
 
     meta_cols = {disease_prob_col, disease_pred_col, disease_true_col,
-                 "correct", "path", "cam_path", "patient_id"}
+                 "correct", "path", "cam_path", "patient_id",
+                 *C0_DERIVED_COLS, *RSNA_META_COLS}
     emb_cols  = [c for c in train_df.columns if c.startswith("emb_")]
     relevant_cols = [c for c in train_df.columns if c not in meta_cols and c not in emb_cols]
 

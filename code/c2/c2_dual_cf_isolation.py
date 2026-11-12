@@ -43,6 +43,7 @@ from c2_prepare_data_simulated_cf import _get_disease_cols, add_clinical_ratios
 DATA_ROOT   = os.environ.get("THESIS_DATA", "/work3/s251710/thesis_data")
 RESULTS_DIR = "/work3/s251710/thesis_results"
 BACKBONE_MAP = {
+    'final':     'C2_final',   # final_experiment rebuild (c2_build_dataset.py)
     'densenet': 'C2_custom',
     'resnet50': 'C2_resnet50',
     'vit':      'C2_vit',

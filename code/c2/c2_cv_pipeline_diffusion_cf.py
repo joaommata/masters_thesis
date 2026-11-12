@@ -5,6 +5,12 @@ Same as c2_cv_pipeline_new_split.py but uses real diffusion CFs
 instead of simulated nearest-neighbour CFs.
 """
 import os
+
+# Shared C0-derived exclusion list (margin + SDN internal-classifier probs)
+# — see c2_feature_spec for why these must not enter the attribute space.
+import os as _os_fs, sys as _sys_fs
+_sys_fs.path.append(_os_fs.path.dirname(_os_fs.path.abspath(__file__)))
+from c2_feature_spec import C0_DERIVED_COLS, RSNA_META_COLS
 import sys
 import json
 import argparse
@@ -73,7 +79,8 @@ def _attr_cols_for(df, disease):
     per-rank CF frame carries them, but they never appear in the query frame.
     """
     meta_cols = {f'{disease}_prob', f'{disease}_pred', f'{disease}_true',
-                 'correct', 'path', 'patient_id', 'cf_prob', 'cf_path', 'cf_idx', 'cf_paths'}
+                 'correct', 'path', 'patient_id', 'cf_prob', 'cf_path', 'cf_idx', 'cf_paths',
+                 *C0_DERIVED_COLS, *RSNA_META_COLS}
     return [c for c in df.columns
             if c not in meta_cols
             and not c.startswith('emb_')
@@ -158,7 +165,8 @@ def attach_diffusion_cfs(df, cf_attrs, manifest, disease):
 
     # Identify attribute columns — exclude meta, embeddings, deltas
     meta_cols = {f'{disease}_prob', f'{disease}_pred', f'{disease}_true',
-                 'correct', 'path', 'patient_id', 'cf_prob', 'cf_paths'}
+                 'correct', 'path', 'patient_id', 'cf_prob', 'cf_paths',
+                 *C0_DERIVED_COLS, *RSNA_META_COLS}
     attr_cols = [c for c in df.columns
                  if c not in meta_cols
                  and not c.startswith('emb_')

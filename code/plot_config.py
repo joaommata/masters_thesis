@@ -28,6 +28,8 @@ PLOT_COLORS = {
     'MCF3': '#2ECC71',  # emerald
     'MCF4': '#3498DB',  # cornflower blue
     'MCF5': '#8E44AD',  # violet
+    'MCF6': '#16A085',  # dark teal  — MCF5 + dispersion
+    'MCF7': '#D35400',  # burnt orange — MCF3 + dispersion
 }
 
 PLOT_LS = {k: '--' if k.startswith('B') else '-' for k in PLOT_COLORS}

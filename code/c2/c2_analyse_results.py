@@ -19,6 +19,11 @@ import os
 import sys
 import json
 import numpy as np
+
+# Shared C0-derived exclusion list (margin + SDN internal-classifier probs)
+# — see c2_feature_spec for why these must not enter the attribute space.
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from c2_feature_spec import C0_DERIVED_COLS, RSNA_META_COLS
 import pandas as pd
 import matplotlib.pyplot as plt
 import joblib
@@ -88,7 +93,8 @@ def get_feature_matrices(valid_df, train_df):
     """
     meta_cols = {
         disease_prob_col, f'{DISEASE}_pred', f'{DISEASE}_true',
-        'correct', 'path', 'patient_id', 'cf_prob', 'cf_paths'
+        'correct', 'path', 'patient_id', 'cf_prob', 'cf_paths',
+        *C0_DERIVED_COLS, *RSNA_META_COLS
     }
     diff_cols = [c for c in train_df.columns if c.startswith('delta_')]
     emb_cols  = [c for c in train_df.columns if c.startswith('emb_')]

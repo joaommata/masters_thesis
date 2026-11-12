@@ -1,0 +1,44 @@
+\begin{table}[htbp]
+\centering
+\footnotesize
+\caption{The four non-redundant regions whose Grad-CAM focus is most correlated with $C_0$'s correctness, per disease and side of $C_0$'s call, and the image outside the body for contrast (KNN counterfactuals, nearest counterfactual, all folds pooled).}
+\label{tab:top_regions}
+\begin{threeparttable}
+\begin{tabular}{lllr|cc|cc|c|cc}
+\toprule
+& & & & \multicolumn{4}{c|}{$r$ with correctness} & & \multicolumn{2}{c}{$r$} \\
+\cmidrule(lr){5-8} \cmidrule(l){10-11}
+& & & & \multicolumn{2}{c|}{X-ray} & \multicolumn{2}{c|}{Cf} & & & \\
+\cmidrule(lr){5-6} \cmidrule(lr){7-8}
+Disease & $C_0$'s call & Region & Rank & Sup. & Ag. & Sup. & Ag. & $d$ & MSP & $\mid$ MSP \\
+\midrule
+\multirow{10}{*}{Cardiomegaly} & \multirow{5}{*}{\shortstack[l]{Positive\\$62.7\%$ wrong}} & Hila & $1$ & $0.050$ & $\mathbf{-0.265}$ & $-0.051$ & $0.072$ & $-0.55$ & $-0.591$ & $-0.026$ \\
+ &  & Heart & $2$ & $-0.038$ & $\mathbf{-0.250}$ & $-0.052$ & $0.049$ & $-0.52$ & $-0.617$ & $0.008$ \\
+ &  & Left lung lower & $3$ & $0.027$ & $\mathbf{-0.190}$ & $-0.038$ & $0.017$ & $-0.39$ & $-0.517$ & $0.032$ \\
+ &  & Right lung lower & $4$ & $0.121$ & $\mathbf{-0.179}$ & $-0.035$ & $0.056$ & $-0.37$ & $-0.341$ & $-0.043$ \\
+ &  & Outside & -- & $0.083$ & $\mathbf{0.280}$ & $0.052$ & $-0.069$ & $0.58$ & $0.606$ & $0.038$ \\
+\cmidrule(l){2-11}
+ & \multirow{5}{*}{\shortstack[l]{Negative\\$4.0\%$ wrong}} & Hila & $1$ & $\mathbf{0.132}$ & $-0.074$ & $0.001$ & $0.015$ & $0.68$ & $0.624$ & $0.031$ \\
+ &  & Heart--left lung overlap & $4$ & $\mathbf{0.110}$ & $-0.042$ & $0.002$ & $0.011$ & $0.56$ & $0.660$ & $-0.007$ \\
+ &  & Mediastinum & $6$ & $\mathbf{0.090}$ & $-0.082$ & $-0.004$ & $0.013$ & $0.46$ & $0.406$ & $0.022$ \\
+ &  & Right lung lower & $8$ & $\mathbf{0.070}$ & $-0.063$ & $-0.002$ & $0.009$ & $0.36$ & $0.308$ & $0.017$ \\
+ &  & Outside & -- & $\mathbf{-0.125}$ & $0.049$ & $-0.010$ & $-0.019$ & $-0.63$ & $-0.677$ & $-0.010$ \\
+\midrule
+\multirow{10}{*}{Effusion} & \multirow{5}{*}{\shortstack[l]{Positive\\$28.7\%$ wrong}} & Right lung lower & $1$ & $\mathbf{0.246}$ & $-0.177$ & $0.019$ & $0.004$ & $0.54$ & $0.530$ & $0.061$ \\
+ &  & Hila & $2$ & $\mathbf{0.208}$ & $-0.176$ & $0.023$ & $0.004$ & $0.46$ & $0.558$ & $-0.001$ \\
+ &  & Spine & $3$ & $0.149$ & $\mathbf{-0.196}$ & $0.007$ & $0.010$ & $-0.42$ & $-0.560$ & $0.018$ \\
+ &  & Heart & $4$ & $0.116$ & $\mathbf{-0.187}$ & $0.010$ & $0.004$ & $-0.40$ & $-0.554$ & $0.028$ \\
+ &  & Outside & -- & $\mathbf{-0.138}$ & $0.040$ & $-0.021$ & $-0.007$ & $-0.31$ & $-0.403$ & $0.015$ \\
+\cmidrule(l){2-11}
+ & \multirow{5}{*}{\shortstack[l]{Negative\\$12.1\%$ wrong}} & Diaphragm & $1$ & $0.158$ & $\mathbf{-0.213}$ & $0.037$ & $0.015$ & $-0.63$ & $-0.565$ & $-0.032$ \\
+ &  & Heart & $2$ & $0.125$ & $\mathbf{-0.173}$ & $-0.019$ & $0.040$ & $-0.51$ & $-0.586$ & $0.028$ \\
+ &  & Right lung lower & $3$ & $-0.019$ & $\mathbf{-0.160}$ & $-0.013$ & $0.012$ & $-0.47$ & $-0.395$ & $-0.033$ \\
+ &  & Hila & $7$ & $-0.038$ & $\mathbf{-0.112}$ & $-0.024$ & $0.040$ & $-0.33$ & $-0.405$ & $0.026$ \\
+ &  & Outside & -- & $-0.046$ & $\mathbf{0.136}$ & $0.040$ & $-0.029$ & $0.40$ & $0.451$ & $-0.016$ \\
+\bottomrule
+\end{tabular}
+\begin{tablenotes}\footnotesize
+\item Focus: share of the Grad-CAM in the region divided by the region's share of the image, as $\log_{10}$. Sup.: the map supporting the call ($C_0$'s call for the X-ray, the counterfactual's own call for Cf); Ag.: the map against it. Within each side, regions are ranked by $|r|$ of the stronger X-ray map, and a region is kept only if the $|r|$ of its supporting focus with every region already kept is below $0.6$; whole lungs and Outside are not ranked. Rank: place among the ranked regions; gaps are regions skipped as redundant. $r$: point-biserial correlation with correctness; bold marks the stronger X-ray map, which the remaining columns use. Positive $r$: more focus in the region goes with correct calls. $d$: mean on correct minus wrong calls, in standard deviations of that side. $r$ MSP: correlation with threshold MSP on the same calls. $r \mid$ MSP: partial correlation with correctness, MSP held fixed. Percentages: share of that side's calls $C_0$ gets wrong.
+\end{tablenotes}
+\end{threeparttable}
+\end{table}

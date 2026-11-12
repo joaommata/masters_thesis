@@ -12,13 +12,13 @@ Disease & Adjusted MSP & I+Cf+D & Dual+S & Mean & Rank & LR \\
 \midrule
 Atelectasis & $\mathbf{0.863} \pm 0.004$ & $0.862 \pm 0.005$ & $0.856 \pm 0.006$ & $+0.0002$ & $+0.0005$ & $\mathbf{+0.0009}^{**}$ \\
 Cardiomegaly & $0.917 \pm 0.002$ & $\mathbf{0.919} \pm 0.003$ & $0.916 \pm 0.003$ & $+0.0016^{**}$ & $+0.0017^{**}$ & $\mathbf{+0.0018}^{**}$ \\
-Consolidation & $\mathbf{0.946} \pm 0.003$ & $0.945 \pm 0.003$ & $0.942 \pm 0.002$ & $+0.0006$ & $\mathbf{+0.0008}^{**}$ & $+0.0006$ \\
+Consolidation & $\mathbf{0.946} \pm 0.003$ & $0.945 \pm 0.003$ & $0.942 \pm 0.002$ & $+0.0006$ & $\mathbf{+0.0008}^{**}$ & $+0.0006^{*}$ \\
 Edema & $0.830 \pm 0.004$ & $\mathbf{0.834} \pm 0.004$ & $0.831 \pm 0.004$ & $+0.0027^{**}$ & $+0.0027^{**}$ & $\mathbf{+0.0028}^{**}$ \\
 Effusion & $0.782 \pm 0.005$ & $\mathbf{0.783} \pm 0.005$ & $0.778 \pm 0.005$ & $+0.0046^{**}$ & $+0.0047^{**}$ & $\mathbf{+0.0049}^{**}$ \\
 \bottomrule
 \end{tabular}
 \begin{tablenotes}\footnotesize
-\item Ensemble gain: mean-fold AUROC of the ensemble minus that of the better member; bold is the largest gain per row. Mean: average of the probabilities; Rank: average of within-fold percentile ranks; LR: logistic-regression stacking fitted leave-one-fold-out. Stars: paired patient-level bootstrap of that gain (5000 replicates), Holm-adjusted across the 15 combiner--disease tests; ***~$p_{adj} < 0.001$, **~$p_{adj} < 0.01$, *~$p_{adj} < 0.05$; no star: not significant.
+\item Ensemble gain: mean-fold AUROC of the ensemble minus that of the better member; bold is the largest gain per row. Mean: average of the probabilities; Rank: average of within-fold percentile ranks; LR: logistic-regression stacking fitted leave-one-fold-out. Stars: paired patient-level bootstrap of that gain (5000 replicates), Holm-adjusted across the five diseases within each combiner; ***~$p_{adj} < 0.001$, **~$p_{adj} < 0.01$, *~$p_{adj} < 0.05$; no star: not significant.
 \end{tablenotes}
 \end{threeparttable}
 \end{table}

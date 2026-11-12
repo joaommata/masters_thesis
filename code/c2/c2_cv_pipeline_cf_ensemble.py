@@ -5,40 +5,12 @@ c2_cv_pipeline_cf_ensemble.py
 per-counterfactual ENSEMBLE instead of averaging the k counterfactuals into a
 single attribute vector.
 
-Difference from c2_cv_pipeline_new_split.py
--------------------------------------------
-The original pipeline retrieves k counterfactual neighbours per sample and
-collapses them with a mean (delta vector, cf_prob, cf_attr_*, cf_emb_* are all
-averaged over the k CFs), producing one feature row per sample.
-
-Here, each of the k counterfactuals is kept separate:
-    * Rank j (j = 0..k-1) yields its own feature row per sample, in which the
-      query-side features (prob, attr, emb) are repeated and only the
-      CF-derived features (delta_*, cf_prob, cf_attr_*, cf_emb_*, delta_emb)
-      vary.
     * ONE model per (model_type, config) is trained on N rows, each sample paired
       with its NEAREST counterfactual (rank 0). The training set is therefore the
       same size as the original pipeline's and does not grow with k.
+
     * At test time that model scores all k expansions of each test sample and the
       k probabilities are averaged into one score per sample.
-
-So the averaging moves from the feature space (before the model) to the score
-space (after the model): pure test-time ensembling over counterfactuals rather
-than feature-averaging. Holding the training set fixed across k means that
-comparing k=1 / 3 / 16 varies exactly one thing — how many counterfactuals are
-averaged at prediction time — so `ensemble_gain` isolates that effect alone.
-
-For the baseline configs no CF-derived features enter the design matrix, so the k
-test expansions of a sample are identical and the scheme reduces to the original.
-(This makes them a useful invariant: for any B* config, mean_auc and
-mean_single_cf_auc must agree exactly.)
-
-Because of that invariance the B* AUCs are reproduced exactly by the non-ensemble
-pipeline, which shares this one's folds, input CSV, models and seed. Only B1, B2
-and B4 are therefore trained here -- enough to keep the invariant and to satisfy
-c2_analyse_results.py. B3 and B5 (the 1024-dim embedding baselines, and nearly all
-of the B* compute) are skipped; take them from the non-ensemble run's
-cv_detailed.json if a plot needs them.
 
 CF routing is fixed to the `correct_cf` strategy (counterfactual is always a
 correctly-classified training example, routed by prediction only):
@@ -49,7 +21,9 @@ Configs:
     Baseline (B1, B2, B4 -- see note above on the omitted B3/B5):
         B1 : disease probability only
         B2 : attribute features only
+        B3 : embedding features only
         B4 : disease probability + attribute features
+        B5 : disease probability + embedding features
 
     Multi-modal (M1-M6):
         M1 : delta features only
@@ -66,6 +40,26 @@ Configs:
         MCF4 : prob + cf_prob + attr + cf_attr + delta_attr + emb + cf_emb
         MCF5 : prob + cf_prob + attr + cf_attr + delta_attr + emb + cf_emb + delta_emb
 
+Entropy mode (--entropy):
+    When set, the binary entropy H(p) = -p log p - (1-p) log(1-p) of the C0
+    probability is ADDED as an extra feature (NOT swapped in). This gives linear
+    readers a symmetric distance-from-0.5 basis they cannot otherwise express.
+
+        * Baselines (B1-B5) are left UNCHANGED so they remain valid reference
+          baselines.
+        * M configs (M1-M6) gain H(prob); M6, which also carries cf_prob, gains
+          H(cf_prob) too.
+        * MCF configs (MCF1-MCF5), which all carry cf_prob, gain both H(prob)
+          and H(cf_prob).
+
+    When --entropy is off, the entropy blocks are zero-width, so every design
+    matrix is byte-identical to the non-entropy run.
+
+    NOTE: H(p) is a deterministic monotone-on-each-half transform of p, i.e. a
+    nonlinear confidence basis, NOT signal orthogonal to confidence. Any gain
+    should be framed accordingly; use band-stratified evaluation to test for
+    confidence-sufficiency claims.
+
 Usage:
     python c2_cv_pipeline_cf_ensemble.py --disease effusion --cf_count 16 --backbone resnet50
 
@@ -74,8 +68,11 @@ Parameters:
     --cf_count   : Number of counterfactuals (k) averaged at test time
     --backbone   : C0 architecture ('densenet', 'resnet50', 'vit', 'medmnist')
     --save_folds : Save individual fold train/test CSVs (rank-0 expansion) to disk
-    --extended   : Use c2_data_extended.csv (adds GLCM radiomics features)
     --distance   : Distance metric for CF neighbour search ('l1', 'l2', 'cosine')
+    --entropy    : ADD binary entropy H(p) to the M and MCF configs only;
+                   baselines untouched. Results written to a TEST_entropy/ subdir.
+    --models     : Restrict to a subset of model types (default: all of LR/RF/MLP)
+    --configs    : Restrict to a subset of configs, e.g. MCF4 MCF5 (default: all)
 """
 
 import os
@@ -94,6 +91,9 @@ from sklearn.neural_network import MLPClassifier
 from sklearn.metrics import roc_auc_score, roc_curve
 from sklearn.model_selection import StratifiedGroupKFold
 
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from c2_feature_spec import C0_DERIVED_COLS, RSNA_META_COLS
+
 # ══════════════════════════════════════════════════════════════════════════════
 # CONFIG
 # ══════════════════════════════════════════════════════════════════════════════
@@ -101,11 +101,11 @@ N_FOLDS     = 5
 RANDOM_SEED = 42
 MODEL_TYPES = ['LR', 'RF', 'MLP']
 
-# ── Entropy / high-capacity-MLP switches (set from CLI in run_cv) ──────────────
+# ── Entropy switches (set from CLI in run_cv) ──────────────
 # When ENTROPY is on, the raw C0 probability feature (and its CF counterpart) is
 # replaced everywhere by its binary entropy H(p) = -p logp - (1-p) log(1-p),
-# matching c2_cv_pipeline_new_split_entropy.py. This also flips the MLP to a
-# larger, better-regularised network to amplify the mid-confidence signal.
+# matching c2_cv_pipeline_new_split_entropy.py. 
+
 ENTROPY = False
 
 def _binary_entropy(p):
@@ -119,11 +119,12 @@ def _binary_entropy(p):
 # c2_analyse_results.py plots them and B1 anchors the ensemble invariant
 # (mean_auc == mean_single_cf_auc). B3/B5 are the two 1024-dim embedding fits,
 # i.e. nearly all of the B* cost; merge them from cv_detailed.json if needed.
-CONFIGS     = ['B1', 'B2', 'B4',
+CONFIGS     = ['B1', 'B2', 'B3', 'B4', 'B5',
                'M1', 'M2', 'M3', 'M4', 'M5', 'M6',
                'MCF1', 'MCF2', 'MCF3', 'MCF4', 'MCF5']
 
 BACKBONE_MAP = {
+    'final':     'C2_final',   # final_experiment rebuild (c2_build_dataset.py)
     'densenet':  'C2_custom',
     'resnet50':  'C2_resnet50',
     'vit':       'C2_vit',
@@ -146,6 +147,32 @@ def _resolve_metric(distance):
         return 'cosine'
     else:
         return 'euclidean'
+
+
+def _build_search_space(train_clean, test_clean, relevant_cols, emb_cols,
+                        train_scaled, test_scaled, search_space):
+    """Matrices the CF neighbour search runs in.
+
+    search_space='attr' searches the standardised attribute vector (default,
+    unchanged behaviour); 'emb' searches the standardised C0 embedding instead.
+
+    This ONLY changes which counterfactual is retrieved. The returned
+    train_scaled/test_scaled attribute matrices — and hence every downstream
+    delta-A feature — are untouched, so an attr-vs-emb comparison isolates the
+    retrieval metric.
+    """
+    if search_space == 'attr':
+        return train_scaled, test_scaled
+
+    if not emb_cols:
+        raise ValueError(
+            "--search_space emb requires emb_* columns, but none were found in "
+            "the input data.")
+
+    train_emb = train_clean[emb_cols].fillna(0).values.astype(float)
+    test_emb  = test_clean[emb_cols].fillna(0).values.astype(float)
+    emb_scaler = StandardScaler()
+    return emb_scaler.fit_transform(train_emb), emb_scaler.transform(test_emb)
 
 
 def add_clinical_ratios(df):
@@ -174,89 +201,116 @@ def add_clinical_ratios(df):
     return df
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TRAIN-SPLIT BALANCING
-# ══════════════════════════════════════════════════════════════════════════════
-
-def balance_quadrants(train_df, disease, ratio=1.0, seed=RANDOM_SEED, strict=False):
-    """
-    Subsample a training fold so C0's four outcome quadrants are balanced.
-
-    Quadrants are (pred x correct): TP, FP, TN, FN. Every error row (FP, FN) is
-    kept by default; the correct quadrants (TP, TN) are subsampled down to
-    `ratio` * n_err, where n_err = min(n_FP, n_FN).
-
-    `ratio` is therefore "how many TPs (and TNs) to keep per FP", NOT the
-    resulting corrects-per-error ratio: the surplus of the larger error quadrant
-    inflates the error side without entering the target. With strict=True the
-    error quadrants are also capped at n_err, giving an exact 1:1:1:1 pool at
-    ratio=1.0 at the cost of discarding real errors.
-
-    Quadrants smaller than their target are kept whole — nothing is ever
-    upsampled or duplicated.
-
-    Applied to the training partition only; test folds keep natural prevalence.
-    """
-    pred_col = f'{disease}_pred'
-    rng = np.random.RandomState(seed)
-
-    preds   = train_df[pred_col].values.astype(int)
-    correct = train_df['correct'].values.astype(int)
-
-    quadrants = {
-        'TP': (preds == 1) & (correct == 1),
-        'FP': (preds == 1) & (correct == 0),
-        'TN': (preds == 0) & (correct == 1),
-        'FN': (preds == 0) & (correct == 0),
-    }
-    n_before = {q: int(m.sum()) for q, m in quadrants.items()}
-
-    # Errors are the scarce resource: they set the budget.
-    n_err = min(n_before['FP'], n_before['FN'])
-    if n_err == 0:
-        print("    [balance] WARNING: empty error quadrant — skipping balancing for this fold")
-        return train_df
-
-    target_correct = int(round(ratio * n_err))
-
-    keep_idx = []
-    for q, mask in quadrants.items():
-        idx = np.where(mask)[0]
-        target = n_err if q in ('FP', 'FN') else target_correct
-        if q in ('FP', 'FN') and not strict:
-            keep_idx.append(idx)              # keep every error
-            continue
-        if len(idx) > target:
-            idx = rng.choice(idx, size=target, replace=False)
-        keep_idx.append(idx)
-
-    keep_idx = np.sort(np.concatenate(keep_idx))
-    balanced = train_df.iloc[keep_idx].reset_index(drop=True)
-
-    b_preds   = balanced[pred_col].values.astype(int)
-    b_correct = balanced['correct'].values.astype(int)
-    n_after = {
-        'TP': int(((b_preds == 1) & (b_correct == 1)).sum()),
-        'FP': int(((b_preds == 1) & (b_correct == 0)).sum()),
-        'TN': int(((b_preds == 0) & (b_correct == 1)).sum()),
-        'FN': int(((b_preds == 0) & (b_correct == 0)).sum()),
-    }
-    n_corr = n_after['TP'] + n_after['TN']
-    n_errs = n_after['FP'] + n_after['FN']
-    print(f"    [balance] ratio={ratio:g}{' strict' if strict else ''}  "
-          f"{len(train_df):,} -> {len(balanced):,} samples")
-    print(f"    [balance] before: {n_before}")
-    print(f"    [balance] after:  {n_after}  "
-          f"(corrects:errors = {n_corr/max(n_errs,1):.2f}:1)")
-
-    return balanced
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # RANKED CF RETRIEVAL (correct_cf routing, k CFs kept separate)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def compute_ranked_cf_correct_cf(train_df, test_df, cf_count, disease, distance='l1'):
+def compute_ranked_cf_gt_routing(train_df, test_df, cf_count, disease, distance='l1',
+                                 search_space='attr'):
+    """
+    Ranked CF retrieval, gt_routing strategy (pool partitioned by TRUE label).
+
+    Routing (query prediction only, so honest at query level):
+        pred=1 -> k nearest training samples with true=0
+        pred=0 -> k nearest training samples with true=1
+
+    Self-match guard (TRAIN split only): an incorrect training sample (FP/FN)
+    lies inside the pool it routes to and would retrieve itself at distance 0.
+    We fetch cf_count+1 neighbours and drop the self-match by global row index.
+    Test queries can't overlap the train pool, so no guard is needed there.
+
+    Returns the same tuple as compute_ranked_cf_correct_cf.
+    """
+    disease_lower = disease.lower()
+    disease_prob_col = f'{disease_lower}_prob'
+    disease_pred_col = f'{disease_lower}_pred'
+    disease_true_col = f'{disease_lower}_true'
+
+    train_df = add_clinical_ratios(train_df.copy())
+    test_df  = add_clinical_ratios(test_df.copy())
+
+    meta_cols = {disease_prob_col, disease_pred_col, disease_true_col,
+                 'correct', 'path', 'cam_path', 'patient_id',
+                 *C0_DERIVED_COLS, *RSNA_META_COLS}
+    emb_cols  = [c for c in train_df.columns if c.startswith('emb_')]
+    relevant_cols = [c for c in train_df.columns if c not in meta_cols and c not in emb_cols]
+
+    train_clean = train_df.copy()
+    test_clean  = test_df.copy()
+    train_clean[relevant_cols] = train_clean[relevant_cols].fillna(0)
+    test_clean[relevant_cols]  = test_clean[relevant_cols].fillna(0)
+
+    attr_scaler  = StandardScaler()
+    train_scaled = attr_scaler.fit_transform(train_clean[relevant_cols].values.astype(float))
+    test_scaled  = attr_scaler.transform(test_clean[relevant_cols].values.astype(float))
+
+    train_search, test_search = _build_search_space(
+        train_clean, test_clean, relevant_cols, emb_cols,
+        train_scaled, test_scaled, search_space)
+
+    metric = _resolve_metric(distance)
+    train_true = train_clean[disease_true_col].values.astype(int)
+
+    # Pools partitioned by TRUE label of the training neighbours
+    idx_true1 = (train_true == 1)
+    idx_true0 = (train_true == 0)
+    pool_global_idx = {'true1': np.where(idx_true1)[0], 'true0': np.where(idx_true0)[0]}
+
+    for key, pool in pool_global_idx.items():
+        if len(pool) < cf_count:
+            raise ValueError(
+                f"{key} pool has only {len(pool)} samples, need >= cf_count={cf_count}"
+            )
+
+    # Fit on cf_count+1 so we always have a fallback after dropping a self-match
+    nn_true1 = NearestNeighbors(n_neighbors=cf_count + 1, metric=metric, n_jobs=-1).fit(train_search[idx_true1])
+    nn_true0 = NearestNeighbors(n_neighbors=cf_count + 1, metric=metric, n_jobs=-1).fit(train_search[idx_true0])
+
+    def _rank_cfs(df, query_scaled, query_global_idx=None):
+        """(n, cf_count) array of train_clean row positions, rank-ordered.
+
+        query_global_idx: row positions of queries within train_clean (train
+        split only). Pass None for test — no overlap with the pool is possible.
+        """
+        query_preds = df[disease_pred_col].values.astype(int)
+        cf_idx = np.empty((len(df), cf_count), dtype=np.int64)
+
+        def _neighbours(nn_model, pool_key, q_scaled, q_global):
+            _, idxs = nn_model.kneighbors(q_scaled)          # (m, cf_count+1) pool-local
+            glob = pool_global_idx[pool_key][idxs]           # -> global train rows
+            if q_global is None:                             # test split: just trim
+                return glob[:, :cf_count]
+            # train split: drop self-match row-by-row, keep first cf_count
+            out = np.empty((glob.shape[0], cf_count), dtype=np.int64)
+            for r in range(glob.shape[0]):
+                keep = glob[r][glob[r] != q_global[r]]
+                out[r] = keep[:cf_count]
+            return out
+
+        # pred=1 -> true=0 pool
+        mask = (query_preds == 1)
+        if mask.any():
+            g = query_global_idx[mask] if query_global_idx is not None else None
+            cf_idx[mask] = _neighbours(nn_true0, 'true0', query_scaled[mask], g)
+
+        # pred=0 -> true=1 pool
+        mask = (query_preds == 0)
+        if mask.any():
+            g = query_global_idx[mask] if query_global_idx is not None else None
+            cf_idx[mask] = _neighbours(nn_true1, 'true1', query_scaled[mask], g)
+
+        return cf_idx
+
+    train_cf_idx = _rank_cfs(train_clean, train_search,
+                             query_global_idx=np.arange(len(train_clean)))
+    test_cf_idx  = _rank_cfs(test_clean, test_search, query_global_idx=None)
+
+    return (train_clean, test_clean, train_cf_idx, test_cf_idx,
+            train_scaled, test_scaled, relevant_cols, emb_cols)
+
+def compute_ranked_cf_correct_cf(train_df, test_df, cf_count, disease, distance='l1',
+                                 search_space='attr'):
     """
     Retrieve the k nearest counterfactuals per query WITHOUT averaging them.
 
@@ -282,8 +336,12 @@ def compute_ranked_cf_correct_cf(train_df, test_df, cf_count, disease, distance=
     train_df = add_clinical_ratios(train_df.copy())
     test_df  = add_clinical_ratios(test_df.copy())
 
+    # C0_DERIVED_COLS keeps margin + the SDN internal-classifier probs out of the
+    # attribute space; see c2_feature_spec for why. RSNA_META_COLS is a no-op on
+    # the CheXpert cohorts (those columns simply don't exist there).
     meta_cols = {disease_prob_col, disease_pred_col, disease_true_col,
-                 'correct', 'path', 'cam_path', 'patient_id'}
+                 'correct', 'path', 'cam_path', 'patient_id',
+                 *C0_DERIVED_COLS, *RSNA_META_COLS}
     emb_cols  = [c for c in train_df.columns if c.startswith('emb_')]
     relevant_cols = [c for c in train_df.columns if c not in meta_cols and c not in emb_cols]
 
@@ -296,6 +354,10 @@ def compute_ranked_cf_correct_cf(train_df, test_df, cf_count, disease, distance=
     attr_scaler  = StandardScaler()
     train_scaled = attr_scaler.fit_transform(train_clean[relevant_cols].values.astype(float))
     test_scaled  = attr_scaler.transform(test_clean[relevant_cols].values.astype(float))
+
+    train_search, test_search = _build_search_space(
+        train_clean, test_clean, relevant_cols, emb_cols,
+        train_scaled, test_scaled, search_space)
 
     metric = _resolve_metric(distance)
     train_preds   = train_clean[disease_pred_col].values.astype(int)
@@ -313,8 +375,8 @@ def compute_ranked_cf_correct_cf(train_df, test_df, cf_count, disease, distance=
                 f"{key.upper()} pool has only {len(pool)} samples, need >= cf_count={cf_count}"
             )
 
-    nn_tp = NearestNeighbors(n_neighbors=cf_count, metric=metric, n_jobs=-1).fit(train_scaled[idx_tp])
-    nn_tn = NearestNeighbors(n_neighbors=cf_count, metric=metric, n_jobs=-1).fit(train_scaled[idx_tn])
+    nn_tp = NearestNeighbors(n_neighbors=cf_count, metric=metric, n_jobs=-1).fit(train_search[idx_tp])
+    nn_tn = NearestNeighbors(n_neighbors=cf_count, metric=metric, n_jobs=-1).fit(train_search[idx_tn])
 
     def _rank_cfs(df, query_scaled):
         """Return an (n, cf_count) array of train_clean row positions, rank-ordered."""
@@ -335,12 +397,16 @@ def compute_ranked_cf_correct_cf(train_df, test_df, cf_count, disease, distance=
 
         return cf_idx
 
-    train_cf_idx = _rank_cfs(train_clean, train_scaled)
-    test_cf_idx  = _rank_cfs(test_clean,  test_scaled)
+    train_cf_idx = _rank_cfs(train_clean, train_search)
+    test_cf_idx  = _rank_cfs(test_clean,  test_search)
 
     return (train_clean, test_clean, train_cf_idx, test_cf_idx,
             train_scaled, test_scaled, relevant_cols, emb_cols)
 
+CF_STRATEGIES = {
+    'correct_cf':  compute_ranked_cf_correct_cf,
+    'gt_routing':  compute_ranked_cf_gt_routing,
+}
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PER-RANK FEATURE MATRIX BUILDER
@@ -373,8 +439,11 @@ def build_rank_blocks(query_clean, query_scaled, train_clean, train_scaled,
     # Entropy mode: swap the C0 probability feature (query + CF) for its binary
     # entropy, so every config that uses b['prob'] / b['cf_prob'] gets it.
     if ENTROPY:
-        prob    = _binary_entropy(prob)
-        cf_prob = _binary_entropy(cf_prob)
+        ent_prob    = _binary_entropy(prob)
+        ent_cf_prob = _binary_entropy(cf_prob)
+    else: 
+        ent_prob    = np.empty((prob.shape[0], 0))      # no columns -> hstack no-op
+        ent_cf_prob = np.empty((cf_prob.shape[0], 0))
 
     delta     = query_scaled - train_scaled[j]            # scaled space, as in the original
     delta_emb = emb - cf_emb
@@ -383,31 +452,37 @@ def build_rank_blocks(query_clean, query_scaled, train_clean, train_scaled,
         'prob': prob, 'attr': attr, 'emb': emb,
         'cf_prob': cf_prob, 'cf_attr': cf_attr, 'cf_emb': cf_emb,
         'delta': delta, 'delta_emb': delta_emb,
+        'ent_prob': ent_prob, 'ent_cf_prob': ent_cf_prob,
     }
 
 
 def assemble_configs(b):
     """Map config name -> design matrix, given the feature blocks `b` for one rank."""
     return {
-        'B1':   b['prob'],
-        'B2':   b['attr'],
-        'B3':   b['emb'],
-        'B4':   np.hstack([b['prob'], b['attr']]),
-        'B5':   np.hstack([b['prob'], b['emb']]),
-        'M1':   b['delta'],
-        'M2':   np.hstack([b['prob'], b['delta']]),
-        'M3':   np.hstack([b['prob'], b['delta'], b['attr']]),
-        'M4':   np.hstack([b['prob'], b['delta'], b['emb']]),
-        'M5':   np.hstack([b['prob'], b['delta'], b['attr'], b['emb']]),
-        'M6':   np.hstack([b['prob'], b['delta'], b['attr'], b['cf_prob']]),
-        'MCF1': np.hstack([b['prob'], b['cf_prob']]),
-        'MCF2': np.hstack([b['prob'], b['cf_prob'], b['attr'], b['cf_attr']]),
-        'MCF3': np.hstack([b['prob'], b['cf_prob'], b['attr'], b['cf_attr'], b['delta']]),
-        'MCF4': np.hstack([b['prob'], b['cf_prob'], b['attr'], b['cf_attr'], b['delta'],
-                           b['emb'], b['cf_emb']]),
-        'MCF5': np.hstack([b['prob'], b['cf_prob'], b['attr'], b['cf_attr'], b['delta'],
-                           b['emb'], b['cf_emb'], b['delta_emb']]),
-    }
+            'B1':   b['prob'],
+            'B2':   b['attr'],
+            'B3':   b['emb'],
+            'B4':   np.hstack([b['prob'], b['attr']]),
+            'B5':   np.hstack([b['prob'], b['emb']]),
+            'M1':   np.hstack([b['delta'], b['ent_prob']]),
+            'M2':   np.hstack([b['prob'], b['delta'], b['ent_prob']]),
+            'M3':   np.hstack([b['prob'], b['delta'], b['attr'], b['ent_prob']]),
+            'M4':   np.hstack([b['prob'], b['delta'], b['emb'], b['ent_prob']]),
+            'M5':   np.hstack([b['prob'], b['delta'], b['attr'], b['emb'], b['ent_prob']]),
+            'M6':   np.hstack([b['prob'], b['delta'], b['attr'], b['cf_prob'],
+                            b['ent_prob'], b['ent_cf_prob']]),
+            'MCF1': np.hstack([b['prob'], b['cf_prob'], b['ent_prob'], b['ent_cf_prob']]),
+            'MCF2': np.hstack([b['prob'], b['cf_prob'], b['attr'], b['cf_attr'],
+                            b['ent_prob'], b['ent_cf_prob']]),
+            'MCF3': np.hstack([b['prob'], b['cf_prob'], b['attr'], b['cf_attr'], b['delta'],
+                            b['ent_prob'], b['ent_cf_prob']]),
+            'MCF4': np.hstack([b['prob'], b['cf_prob'], b['attr'], b['cf_attr'], b['delta'],
+                            b['emb'], b['cf_emb'],
+                            b['ent_prob'], b['ent_cf_prob']]),
+            'MCF5': np.hstack([b['prob'], b['cf_prob'], b['attr'], b['cf_attr'], b['delta'],
+                            b['emb'], b['cf_emb'], b['delta_emb'],
+                            b['ent_prob'], b['ent_cf_prob']]),
+        }
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -473,10 +548,8 @@ def train_model(X_train, X_test_ranks, y_train, model_type):
 # MAIN CV PIPELINE
 # ══════════════════════════════════════════════════════════════════════════════
 
-def run_cv(disease, cf_count, save_fold_data=False, backbone='densenet',
-           extended=False, distance='l1', entropy=False,
-           models=None, configs=None, balance=False, balance_ratio=1.0,
-           strict_balance=False):
+def run_cv(disease, cf_count, save_fold_data=False, backbone='densenet', distance='l1', entropy=False,
+        models=None, configs=None, strategy='correct_cf', search_space='attr'):
     """
     Run the 5-fold CV pipeline with test-time averaging over k counterfactuals.
 
@@ -490,17 +563,10 @@ def run_cv(disease, cf_count, save_fold_data=False, backbone='densenet',
     cf_count       : int  - Number of counterfactual neighbours (k)
     save_fold_data : bool - Save per-fold train/test CSVs (rank-0 expansion)
     backbone       : str  - C0 architecture ('densenet', 'resnet50', 'vit', 'medmnist')
-    extended       : bool - Use c2_data_extended.csv (adds GLCM radiomics features)
     distance       : str  - Distance metric for CF neighbour search
-    balance        : bool - Subsample each TRAIN fold to balance C0's TP/FP/TN/FN
-                            quadrants. Test folds keep natural prevalence, so AUCs
-                            stay comparable to unbalanced runs. NOTE: this also
-                            shrinks the TP/TN pools the CFs are drawn from.
-    balance_ratio  : float - TPs (and TNs) kept per FP; see balance_quadrants
-    strict_balance : bool - Also cap FP/FN at min(n_FP, n_FN) for an exact 1:1:1:1
+    strategy       : str  - CF routing strategy
     """
 
-    # big_mlp defaults to following entropy (the entropy+ensemble run we want
     # is the one that uses the high-capacity net), but can be forced independently.
     global ENTROPY, MODEL_TYPES, CONFIGS
     ENTROPY = entropy
@@ -514,32 +580,35 @@ def run_cv(disease, cf_count, save_fold_data=False, backbone='densenet',
     print(f"\n{'='*70}")
     print(f"  {N_FOLDS}-FOLD CV (CF SCORE-AVERAGING): {disease.upper()} | k={cf_count} "
           f"| BACKBONE={backbone} | DISTANCE={distance}")
-    print(f"  ENTROPY={ENTROPY}")
+    # search_space changes which CF is retrieved but not the delta-A features, so it is
+    # invisible in the results table — print it or an attr/emb pair looks like a rerun.
+    print(f"  ENTROPY={ENTROPY}  SEARCH_SPACE={search_space}")
     print(f"  MODELS={MODEL_TYPES}  CONFIGS={CONFIGS}")
     print(f"{'='*70}\n")
 
     # ── Setup paths ───────────────────────────────────────────────────────
     results_base = os.path.join(RESULTS_DIR, '')
     data_subdir  = BACKBONE_MAP[backbone]
-    cv_subdir    = 'cv_results_extended_cf_ensemble' if extended else 'cv_results_cf_ensemble'
+    cv_subdir    = 'cv_results_cf_ensemble'
 
     cv_dir = os.path.join(results_base, f'{data_subdir}_corrected/{disease}/{cv_subdir}/cf_{cf_count}')
-    cv_dir = os.path.join(cv_dir, f'distance_{distance}') if distance != 'l1' else cv_dir
-    # Keep entropy (+ big-MLP) runs in a sibling dir so they don't clobber the
+    cv_dir = os.path.join(cv_dir, f'distance_{distance}')
+    cv_dir = os.path.join(cv_dir, f'strategy_{strategy}')
+    # 'attr' keeps the historical layout; only emb-space runs get their own dir.
+    if search_space != 'attr':
+        cv_dir = os.path.join(cv_dir, f'search_{search_space}')
+
+
     # existing raw-prob ensemble results.
     if ENTROPY:
-        cv_dir = os.path.join(cv_dir, 'TEST_entropy')
-    # Balanced runs land in their own subtree so they never overwrite existing results.
-    if balance:
-        cv_dir = os.path.join(
-            cv_dir, f'balanced_r{balance_ratio:g}{"_strict" if strict_balance else ""}')
+        cv_dir = os.path.join(cv_dir, 'TEST_entropy_added(M-only)')  # M configs only, baselines untouched
 
     fold_data_dir = os.path.join(cv_dir, 'fold_data')
     os.makedirs(cv_dir, exist_ok=True)
     os.makedirs(fold_data_dir, exist_ok=True)
 
     # ── Load data ─────────────────────────────────────────────────────────
-    data_csv = 'c2_data_extended.csv' if extended else 'c2_data.csv'
+    data_csv = 'c2_data.csv'
     full_df = pd.read_csv(os.path.join(results_base, f'{data_subdir}/{disease}/{data_csv}'))
 
     full_df.rename(columns={
@@ -551,11 +620,8 @@ def run_cv(disease, cf_count, save_fold_data=False, backbone='densenet',
     print(f"Backbone:   {backbone}  ->  {data_subdir}/{data_csv}")
     print(f"CV Subdir:  {cv_subdir}")
     print(f"CF Count:   {cf_count}  (train on nearest CF; test scores averaged over k)")
-    print(f"CF Routing: correct_cf (pred=1 -> TN pool, pred=0 -> TP pool)")
+    print(f"CF Routing: {strategy}")
     print(f"Save Fold Data: {save_fold_data}")
-    print(f"Balance train folds: {balance}"
-          + (f" (ratio={balance_ratio:g}{', strict' if strict_balance else ''})" if balance else "")
-          + "\n")
     print(f"Full dataset: {len(full_df):,} samples")
     print(f"  Correct:   {(full_df['correct']==1).sum():,}")
     print(f"  Incorrect: {(full_df['correct']==0).sum():,}\n")
@@ -579,19 +645,15 @@ def run_cv(disease, cf_count, save_fold_data=False, backbone='densenet',
         overlap = set(fold_train['patient_id']) & set(fold_test['patient_id'])
         print(f"  Patient overlap train/test: {len(overlap)} (should be 0)")
 
-        # ── Balance the TRAIN partition only (test keeps natural prevalence) ──
-        if balance:
-            fold_train = balance_quadrants(
-                fold_train, disease=disease, ratio=balance_ratio,
-                seed=RANDOM_SEED + fold_idx, strict=strict_balance,
-            )
-
         # ── Retrieve k ranked counterfactuals (no averaging) ──────────────
-        print(f"  Retrieving {cf_count} ranked counterfactuals...")
+        print(f"  Retrieving {cf_count} ranked counterfactuals "
+              f"(strategy: {strategy}, search space: {search_space})...")
+        retrieval_fn = CF_STRATEGIES[strategy]
         (train_clean, test_clean, train_cf_idx, test_cf_idx,
-         train_scaled, test_scaled, relevant_cols, emb_cols) = compute_ranked_cf_correct_cf(
+         train_scaled, test_scaled, relevant_cols, emb_cols) = retrieval_fn(
             train_df=fold_train, test_df=fold_test,
             cf_count=cf_count, disease=disease, distance=distance,
+            search_space=search_space,
         )
 
         y_train = train_clean['correct'].values
@@ -617,6 +679,13 @@ def run_cv(disease, cf_count, save_fold_data=False, backbone='densenet',
                         train_clean, disease, fold_data_dir, fold_idx)
 
         fold_pred_df = test_clean.copy()
+        # Persist the CF assignment (nearest-first, pipe-separated train paths)
+        # so downstream consumers (e.g. the CNN baselines) can pair each query
+        # with its actual CF images instead of re-running retrieval.
+        train_paths = train_clean['path'].values
+        fold_pred_df['cf_paths'] = [
+            '|'.join(train_paths[test_cf_idx[i]]) for i in range(len(test_cf_idx))
+        ]
 
         # ── One model per (model_type, config), scored over k CF expansions ──
         for model_type in MODEL_TYPES:
@@ -728,10 +797,8 @@ if __name__ == '__main__':
         parser.add_argument('--cf_count', type=int, default=16,
                             help='Number of counterfactuals (k) averaged at test time')
         parser.add_argument('--backbone', type=str, default='densenet',
-                            choices=['densenet', 'resnet50', 'vit', 'medmnist'])
+                            choices=['densenet', 'resnet50', 'vit', 'medmnist', 'final'])
         parser.add_argument('--save_folds', action='store_true')
-        parser.add_argument('--extended',   action='store_true',
-                            help='Use c2_data_extended.csv (adds GLCM radiomics features)')
         parser.add_argument('--distance', type=str, default='l1',
                             choices=['l1', 'l2', 'cosine'],
                             help='Distance metric for CF neighbour search')
@@ -743,17 +810,16 @@ if __name__ == '__main__':
         parser.add_argument('--configs', nargs='+', default=None,
                             help='Restrict to a subset of configs, e.g. MCF4 MCF5 '
                                  '(default: all)')
-        parser.add_argument('--balance', action='store_true',
-                            help='Subsample each TRAIN fold to balance C0 TP/FP/TN/FN '
-                                 'quadrants (test folds keep natural prevalence)')
-        parser.add_argument('--balance_ratio', type=float, default=1.0,
-                            help='TPs (and TNs) kept per FP. NOT the resulting '
-                                 'corrects-per-error ratio — the larger error quadrant '
-                                 'is kept whole unless --strict_balance. Single value; '
-                                 'run once per ratio to sweep.')
-        parser.add_argument('--strict_balance', action='store_true',
-                            help='Also cap FP/FN at min(n_FP, n_FN) for an exact 1:1:1:1 '
-                                 'pool (discards real errors)')
+        parser.add_argument('--strategy', type=str, default='correct_cf',
+                            choices=['correct_cf', 'gt_routing'],
+                            help='CF routing strategy')
+        parser.add_argument('--search_space', type=str, default='attr',
+                            choices=['attr', 'emb'],
+                            help='Feature space the CF neighbour search runs in: '
+                                 'attribute vector (default) or C0 embeddings. '
+                                 'Only affects WHICH CF is retrieved; the '
+                                 'delta-A features are identical either way. '
+                                 'emb runs are written to a search_emb/ subdir.')
         args = parser.parse_args()
 
         run_cv(
@@ -761,12 +827,10 @@ if __name__ == '__main__':
             cf_count=args.cf_count,
             save_fold_data=args.save_folds,
             backbone=args.backbone,
-            extended=args.extended,
             distance=args.distance,
             entropy=args.entropy,
             models=args.models,
             configs=args.configs,
-            balance=args.balance,
-            balance_ratio=args.balance_ratio,
-            strict_balance=args.strict_balance,
+            strategy=args.strategy,
+            search_space=args.search_space,
         )

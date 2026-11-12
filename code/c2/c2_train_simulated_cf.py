@@ -35,6 +35,12 @@ Outputs (saved to results/C2_sim_cf/{disease}/):
 """
 
 import os
+
+# Shared C0-derived exclusion list (margin + SDN internal-classifier probs)
+# — see c2_feature_spec for why these must not enter the attribute space.
+import os as _os_fs, sys as _sys_fs
+_sys_fs.path.append(_os_fs.path.dirname(_os_fs.path.abspath(__file__)))
+from c2_feature_spec import C0_DERIVED_COLS, RSNA_META_COLS
 import json
 import joblib
 import numpy as np
@@ -300,7 +306,8 @@ def main():
     diff_cols = [c for c in train_df.columns if c.startswith('delta_')]
     emb_cols  = [c for c in train_df.columns if c.startswith('emb_')]
     meta_cols = {disease_prob_col, f"{DISEASE.lower()}_pred", f"{DISEASE.lower()}_true",
-                'correct', 'path', 'patient_id', 'cf_prob', 'cf_paths'}# cf_paths is a new column that contains the path to the CF example found for each original example (this is just for other analysis and isn't used as a feature)
+                'correct', 'path', 'patient_id', 'cf_prob', 'cf_paths',
+                *C0_DERIVED_COLS, *RSNA_META_COLS}# cf_paths is a new column that contains the path to the CF example found for each original example (this is just for other analysis and isn't used as a feature)
     attr_cols = [c for c in train_df.columns
                  if c not in meta_cols
                  and not c.startswith('delta_')

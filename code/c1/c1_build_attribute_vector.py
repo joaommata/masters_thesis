@@ -128,7 +128,14 @@ class FeatureVectorBuilder:
             height = ys.max() - ys.min()
             geo_feats[f"{class_name}_bbox_width"]  = float(width)
             geo_feats[f"{class_name}_bbox_height"] = float(height)
-            geo_feats[f"{class_name}_bbox_ratio"]  = float(width / (height + 1e-6))
+            # NaN, not width*1e6, when the box has zero height. `height` is
+            # ys.max() - ys.min(), so a mask one pixel tall gives exactly 0, and
+            # the old `+ 1e-6` guard turned an undefined aspect ratio into a
+            # value six orders of magnitude outside the training distribution.
+            # Degenerate masks are rare on real radiographs and common on
+            # generated counterfactuals, so this only ever bit the latter.
+            geo_feats[f"{class_name}_bbox_ratio"]  = (
+                float(width / height) if height > 0 else float("nan"))
 
         contours, _ = cv2.findContours(mask_np.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if len(contours) > 0:

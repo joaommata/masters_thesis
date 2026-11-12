@@ -41,6 +41,12 @@ Parameters:
 """
 
 import os
+
+# Shared C0-derived exclusion list (margin + SDN internal-classifier probs)
+# — see c2_feature_spec for why these must not enter the attribute space.
+import os as _os_fs, sys as _sys_fs
+_sys_fs.path.append(_os_fs.path.dirname(_os_fs.path.abspath(__file__)))
+from c2_feature_spec import C0_DERIVED_COLS, RSNA_META_COLS
 import sys
 import json
 import argparse
@@ -77,6 +83,7 @@ CONFIGS     = ['B1', 'B2','B3','B4','B5',
 #CONFIGS = ['MCF1','MCF2','MCF3','MCF4','MCF5']  # For quick testing
 # Map backbone name → results subdirectory
 BACKBONE_MAP = {
+    'final':     'C2_final',   # final_experiment rebuild (c2_build_dataset.py)
     'densenet':  'C2_custom',
     'resnet50':  'C2_resnet50',
     'vit':       'C2_vit',
@@ -254,7 +261,8 @@ def build_feature_matrices(train_df, test_df, disease):
 
     meta_cols = {f'{disease}_prob', f'{disease}_pred', f'{disease}_true',
                  'correct', 'path', 'cam_path', 'patient_id',
-                 'cf_prob', 'cf_paths', 'delta_prob'}
+                 'cf_prob', 'cf_paths', 'delta_prob',
+                 *C0_DERIVED_COLS, *RSNA_META_COLS}
     diff_cols    = [c for c in train_df.columns if c.startswith('delta_')]
     emb_cols     = [c for c in train_df.columns if c.startswith('emb_')]
     cf_attr_cols = [c for c in train_df.columns if c.startswith('cf_attr_')]
@@ -321,7 +329,7 @@ def build_feature_matrices(train_df, test_df, disease):
 # MAIN CV PIPELINE
 # ══════════════════════════════════════════════════════════════════════════════
 
-def run_cv(disease, cf_count, save_fold_data=False, unmatched=False, backbone='densenet', k_offset=0, correct_cf=False, extended=False, gt_routing=False, distance='l1', balance=False, balance_ratio=1.0):
+def run_cv(disease, cf_count, save_fold_data=False, unmatched=False, backbone='densenet', k_offset=0, correct_cf=False, extended=False, gt_routing=False, distance='l1', balance=False, balance_ratio=1.0, save_models=False):
     """
     Run complete 5-fold CV pipeline.
 
@@ -394,6 +402,7 @@ def run_cv(disease, cf_count, save_fold_data=False, unmatched=False, backbone='d
     print(f"Use Correct-CF pools: {correct_cf}")
     print(f"Use GT-routing pools: {gt_routing}")
     print(f"K-offset for CFs: {k_offset}")
+    print(f"Save models: {save_models}")
     print(f"Balance train folds: {balance}" + (f" (ratio={balance_ratio:g})" if balance else "") + "\n")
     print(f"Full dataset: {len(full_df):,} samples")
     print(f"  Correct:   {(full_df['correct']==1).sum():,}")
@@ -502,8 +511,9 @@ def run_cv(disease, cf_count, save_fold_data=False, unmatched=False, backbone='d
         #for model_type in ['LR']:
             print(f"\n  {model_type}:")
 
-            model_dir = os.path.join(cv_dir, 'models', model_type)
-            os.makedirs(model_dir, exist_ok=True)
+            if save_models:
+                model_dir = os.path.join(cv_dir, 'models', model_type)
+                os.makedirs(model_dir, exist_ok=True)
 
             for config in CONFIGS:
                 if config not in feature_sets:
@@ -513,12 +523,16 @@ def run_cv(disease, cf_count, save_fold_data=False, unmatched=False, backbone='d
 
                 res = train_model(X_train, X_test, y_train, y_test, model_type=model_type)
 
-                # Save model
-                model_path = os.path.join(model_dir, f"{model_type}_{config}_fold{fold_idx}.pkl")
-                if model_type in ['LR', 'MLP']:
-                    joblib.dump({'model': res['model'], 'scaler': res['scaler']}, model_path)
-                else:
-                    joblib.dump(res['model'], model_path)
+                # Save model. Off by default: 16 configs x 3 models x 5 folds of
+                # RF/MLP fitted on 72k rows runs to tens of GB, and the only
+                # consumer is c2_feature_importance_new_split.py. Enable with
+                # --save_models when you actually need that analysis.
+                if save_models:
+                    model_path = os.path.join(model_dir, f"{model_type}_{config}_fold{fold_idx}.pkl")
+                    if model_type in ['LR', 'MLP']:
+                        joblib.dump({'model': res['model'], 'scaler': res['scaler']}, model_path)
+                    else:
+                        joblib.dump(res['model'], model_path)
 
                 cv_results[model_type][config].append({
                     'auc': res['auc'],
@@ -591,7 +605,7 @@ if __name__ == '__main__':
         parser.add_argument('--disease',  type=str, default='effusion')
         parser.add_argument('--cf_count', type=int, default=16)
         parser.add_argument('--backbone', type=str, default='densenet',
-                            choices=['densenet', 'resnet50', 'vit', 'medmnist'])
+                            choices=['densenet', 'resnet50', 'vit', 'medmnist', 'final'])
         parser.add_argument('--save_folds', action='store_true')
         parser.add_argument('--unmatched',  action='store_true')
         parser.add_argument('--correct_cf', action='store_true')
@@ -608,7 +622,23 @@ if __name__ == '__main__':
                                  '(test folds keep natural prevalence)')
         parser.add_argument('--balance_ratio', type=float, default=1.0,
                             help='Correct-per-error ratio when balancing (1.0 = fully balanced 1:1:1:1)')
+        parser.add_argument('--save_models', action='store_true',
+                            help='Pickle every fitted model (16 configs x 3 models x 5 folds). '
+                                 'Off by default -- tens of GB; only '
+                                 'c2_feature_importance_new_split.py reads them.')
+        parser.add_argument('--configs', type=str, default=None,
+                            help='Comma-separated subset of configs to evaluate, e.g. '
+                                 '"B1,B2,B4,M1,M2,M3,M6". Default: all of CONFIGS. Use this to '
+                                 'skip the embedding-wide configs (B3,B5,M4,M5,MCF4,MCF5), which '
+                                 'are the dominant cost at this cohort size.')
         args = parser.parse_args()
+        if args.configs:
+            requested = [c.strip() for c in args.configs.split(',') if c.strip()]
+            unknown = [c for c in requested if c not in CONFIGS]
+            if unknown:
+                parser.error(f'unknown config(s): {unknown}; valid: {CONFIGS}')
+            CONFIGS = requested
+            print(f'Configs restricted to: {CONFIGS}')
         run_cv(
             disease=args.disease,
             cf_count=args.cf_count,
@@ -622,4 +652,5 @@ if __name__ == '__main__':
             distance=args.distance,
             balance=args.balance,
             balance_ratio=args.balance_ratio,
+            save_models=args.save_models,
         )

@@ -1,7 +1,7 @@
 \begin{table}[htbp]
 \centering
 \small
-\caption{AUROC for predicting C0 correctness with the attribute-based models, using KNN counterfactuals and $K \in \{1,5,10\}$. Values are mean $\pm$ std over 5 CV folds. I: input attributes/embeddings, Cf: counterfactual attributes/embeddings, D: query$-$counterfactual difference.}
+\caption{AUROC for predicting C0 correctness with the attribute-based models, using KNN counterfactuals and $K \in \{1,5,10\}$. Values are mean $\pm$ std over 5 CV folds. I: input attributes/embeddings, Cf: counterfactual attributes/embeddings, D: query$-$counterfactual difference. Stars on the $K=10$ cells: paired patient-level bootstrap of $K=10$ against $K=1$ (5000 replicates), Holm-adjusted across the five diseases within each configuration; ***~$p_{adj} < 0.001$, **~$p_{adj} < 0.01$, *~$p_{adj} < 0.05$; no star: not significant (I does not depend on $K$).}
 \label{tab:attr_knn_k}
 \begin{tabular}{llccccc}
 \toprule
@@ -9,23 +9,23 @@ Disease & $K$ & Input (I) & Counterfactual (Cf) & Delta (D) & I+Cf & I+Cf+D \\
 \midrule
 \multirow{3}{*}{Atelectasis} & 1 & \multirow{3}{*}{$0.850 \pm 0.004$} & $0.830 \pm 0.007$ & $0.850 \pm 0.004$ & $0.857 \pm 0.004$ & $\mathbf{0.858} \pm 0.005$ \\
  & 5 &  & $0.834 \pm 0.006$ & $0.854 \pm 0.004$ & $0.861 \pm 0.004$ & $\mathbf{0.861} \pm 0.005$ \\
- & 10 &  & $0.835 \pm 0.006$ & $0.856 \pm 0.004$ & $0.861 \pm 0.004$ & $\mathbf{0.862} \pm 0.005$ \\
+ & 10 &  & $0.835^{**} \pm 0.006$ & $0.856^{**} \pm 0.004$ & $0.861^{**} \pm 0.004$ & $\mathbf{0.862}^{**} \pm 0.005$ \\
 \midrule
 \multirow{3}{*}{Cardiomegaly} & 1 & \multirow{3}{*}{$0.911 \pm 0.003$} & $0.877 \pm 0.003$ & $0.906 \pm 0.003$ & $0.915 \pm 0.003$ & $\mathbf{0.915} \pm 0.003$ \\
  & 5 &  & $0.882 \pm 0.003$ & $0.913 \pm 0.003$ & $0.918 \pm 0.003$ & $\mathbf{0.918} \pm 0.003$ \\
- & 10 &  & $0.883 \pm 0.003$ & $0.914 \pm 0.002$ & $0.918 \pm 0.003$ & $\mathbf{0.919} \pm 0.003$ \\
+ & 10 &  & $0.883^{**} \pm 0.003$ & $0.914^{**} \pm 0.002$ & $0.918^{**} \pm 0.003$ & $\mathbf{0.919}^{**} \pm 0.003$ \\
 \midrule
 \multirow{3}{*}{Consolidation} & 1 & \multirow{3}{*}{$0.939 \pm 0.003$} & $0.930 \pm 0.002$ & $0.939 \pm 0.003$ & $\mathbf{0.943} \pm 0.003$ & $0.943 \pm 0.003$ \\
  & 5 &  & $0.932 \pm 0.002$ & $0.942 \pm 0.002$ & $0.945 \pm 0.003$ & $\mathbf{0.945} \pm 0.003$ \\
- & 10 &  & $0.933 \pm 0.002$ & $0.942 \pm 0.002$ & $0.945 \pm 0.003$ & $\mathbf{0.945} \pm 0.003$ \\
+ & 10 &  & $0.933^{**} \pm 0.002$ & $0.942^{**} \pm 0.002$ & $0.945^{**} \pm 0.003$ & $\mathbf{0.945}^{**} \pm 0.003$ \\
 \midrule
 \multirow{3}{*}{Edema} & 1 & \multirow{3}{*}{$0.824 \pm 0.004$} & $0.776 \pm 0.003$ & $0.816 \pm 0.004$ & $0.827 \pm 0.004$ & $\mathbf{0.829} \pm 0.003$ \\
  & 5 &  & $0.786 \pm 0.004$ & $0.826 \pm 0.003$ & $0.832 \pm 0.004$ & $\mathbf{0.834} \pm 0.004$ \\
- & 10 &  & $0.788 \pm 0.004$ & $0.828 \pm 0.003$ & $0.833 \pm 0.004$ & $\mathbf{0.834} \pm 0.004$ \\
+ & 10 &  & $0.788^{**} \pm 0.004$ & $0.828^{**} \pm 0.003$ & $0.833^{**} \pm 0.004$ & $\mathbf{0.834}^{**} \pm 0.004$ \\
 \midrule
 \multirow{3}{*}{Effusion} & 1 & \multirow{3}{*}{$0.779 \pm 0.003$} & $0.653 \pm 0.003$ & $0.763 \pm 0.004$ & $\mathbf{0.779} \pm 0.006$ & $0.778 \pm 0.005$ \\
  & 5 &  & $0.664 \pm 0.004$ & $0.775 \pm 0.005$ & $\mathbf{0.783} \pm 0.006$ & $0.782 \pm 0.005$ \\
- & 10 &  & $0.665 \pm 0.004$ & $0.777 \pm 0.006$ & $\mathbf{0.783} \pm 0.006$ & $0.783 \pm 0.005$ \\
+ & 10 &  & $0.665^{**} \pm 0.004$ & $0.777^{**} \pm 0.006$ & $\mathbf{0.783}^{**} \pm 0.006$ & $0.783^{**} \pm 0.005$ \\
 \bottomrule
 \end{tabular}
 \end{table}

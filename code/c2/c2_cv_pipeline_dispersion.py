@@ -82,6 +82,13 @@ Parameters:
 """
 
 import os
+
+# Shared C0-derived exclusion list (margin + SDN internal-classifier probs)
+# — see c2_feature_spec for why these must not enter the attribute space.
+import os as _os_fs, sys as _sys_fs
+_sys_fs.path.append(_os_fs.path.dirname(_os_fs.path.abspath(__file__)))
+from c2_feature_spec import C0_DERIVED_COLS, RSNA_META_COLS
+
 import sys
 import json
 import argparse
@@ -116,6 +123,7 @@ CONFIGS     = ['B1', 'B2', 'B4',
 DISPERSION_PAIRS = [('MCF6', 'MCF5'), ('MCF7', 'MCF3')]
 
 BACKBONE_MAP = {
+    'final':     'C2_final',   # final_experiment rebuild (c2_build_dataset.py)
     'densenet':  'C2_custom',
     'resnet50':  'C2_resnet50',
     'vit':       'C2_vit',
@@ -192,7 +200,8 @@ def compute_cf_with_dispersion(train_df, test_df, cf_count, disease, distance='l
     train_df = add_clinical_ratios(train_df.copy())
     test_df  = add_clinical_ratios(test_df.copy())
 
-    meta_cols = {prob_col, pred_col, true_col, 'correct', 'path', 'patient_id'}
+    meta_cols = {prob_col, pred_col, true_col, 'correct', 'path', 'patient_id',
+                 *C0_DERIVED_COLS, *RSNA_META_COLS}
     emb_cols  = [c for c in train_df.columns if c.startswith('emb_')]
     relevant_cols = [c for c in train_df.columns if c not in meta_cols and c not in emb_cols]
 
@@ -547,7 +556,7 @@ if __name__ == '__main__':
         parser.add_argument('--cf_count', type=int, default=16,
                             help='Number of counterfactuals (k); must be > 1')
         parser.add_argument('--backbone', type=str, default='densenet',
-                            choices=['densenet', 'resnet50', 'vit', 'medmnist'])
+                            choices=['densenet', 'resnet50', 'vit', 'medmnist', 'final'])
         parser.add_argument('--save_folds', action='store_true')
         parser.add_argument('--extended',   action='store_true',
                             help='Use c2_data_extended.csv (adds GLCM radiomics features)')

@@ -403,12 +403,16 @@ def main():
     train_df_out = run_inference(model, ics, train_loader, train_cam_dir, split="train")
     val_df_out   = run_inference(model, ics, val_loader, val_cam_dir, split="val")
 
-    banner("METRICS")
-    thresh, auc = find_threshold(train_df_out)
-
+    #banner("METRICS")
+    #thresh, auc = find_threshold(train_df_out)
+    thresh = 0.5
+    auc = roc_auc_score(train_df_out["true"], train_df_out["prob"])
+    with open(os.path.join(OUTPUT_DIR, "threshold_fixed.txt"), "w") as f:
+            f.write(str(thresh))
+            
     print(f"Train AUC (final layer): {auc:.4f}")
-    print(f"Optimal threshold: {thresh:.4f}")
-
+    print(f"Fixed threshold:  {thresh:.4f}")
+    
     train_df_out = apply_threshold(train_df_out, thresh)
     val_df_out   = apply_threshold(val_df_out, thresh)
 
@@ -424,8 +428,8 @@ def main():
         print(f"    {'final':<14} {roc_auc_score(df['true'], df['prob']):.4f}")
 
     banner("SAVING OUTPUTS")
-    train_csv = os.path.join(OUTPUT_DIR, f"train_c0_{DISEASE}.csv")
-    val_csv   = os.path.join(OUTPUT_DIR, f"val_c0_{DISEASE}.csv")
+    train_csv = os.path.join(OUTPUT_DIR, f"train_c0_{DISEASE}_0.5.csv")
+    val_csv   = os.path.join(OUTPUT_DIR, f"val_c0_{DISEASE}_0.5.csv")
 
     train_df_out.to_csv(train_csv, index=False)
     print(f"Wrote {train_csv} ({len(train_df_out):,} rows)")

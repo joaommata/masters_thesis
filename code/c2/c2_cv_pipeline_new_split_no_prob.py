@@ -40,6 +40,12 @@ Parameters:
 """
 
 import os
+
+# Shared C0-derived exclusion list (margin + SDN internal-classifier probs)
+# — see c2_feature_spec for why these must not enter the attribute space.
+import os as _os_fs, sys as _sys_fs
+_sys_fs.path.append(_os_fs.path.dirname(_os_fs.path.abspath(__file__)))
+from c2_feature_spec import C0_DERIVED_COLS, RSNA_META_COLS
 import sys
 import json
 import argparse
@@ -75,6 +81,7 @@ CONFIGS     = ['M1','M2','M3','M4','M5','M6',
 #CONFIGS = ['MCF1','MCF2','MCF3','MCF4','MCF5']  # For quick testing
 # Map backbone name → results subdirectory
 BACKBONE_MAP = {
+    'final':     'C2_final',   # final_experiment rebuild (c2_build_dataset.py)
     'densenet':  'C2_custom',
     'resnet50':  'C2_resnet50',
     'vit':       'C2_vit',
@@ -181,7 +188,8 @@ def build_feature_matrices(train_df, test_df, disease):
 
     meta_cols = {f'{disease}_prob', f'{disease}_pred', f'{disease}_true',
                  'correct', 'path', 'patient_id',
-                 'cf_prob', 'cf_paths', 'delta_prob'}
+                 'cf_prob', 'cf_paths', 'delta_prob',
+                 *C0_DERIVED_COLS, *RSNA_META_COLS}
     diff_cols    = [c for c in train_df.columns if c.startswith('delta_')]
     emb_cols     = [c for c in train_df.columns if c.startswith('emb_')]
     cf_attr_cols = [c for c in train_df.columns if c.startswith('cf_attr_')]
@@ -497,7 +505,7 @@ if __name__ == '__main__':
         parser.add_argument('--disease',  type=str, default='effusion')
         parser.add_argument('--cf_count', type=int, default=16)
         parser.add_argument('--backbone', type=str, default='densenet',
-                            choices=['densenet', 'resnet50', 'vit', 'medmnist'])
+                            choices=['densenet', 'resnet50', 'vit', 'medmnist', 'final'])
         parser.add_argument('--save_folds', action='store_true')
         parser.add_argument('--unmatched',  action='store_true')
         parser.add_argument('--correct_cf', action='store_true')

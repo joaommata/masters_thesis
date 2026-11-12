@@ -1,0 +1,34 @@
+\begin{table}[htbp]
+\centering
+\small
+\caption{Effusion: the five non-redundant attributes most correlated with $C_0$'s correctness, per side of $C_0$'s call (KNN counterfactuals, nearest counterfactual, all folds pooled).}
+\label{tab:top_attributes_effusion}
+\begin{threeparttable}
+\begin{tabular}{llrccccc}
+\toprule
+& & & \multicolumn{3}{c}{$r$ with correctness} & \multicolumn{2}{c}{Relation to MSP} \\
+\cmidrule(lr){4-6} \cmidrule(l){7-8}
+$C_0$'s call & Attribute & Rank & I & Cf & D & $r$ & Partial $r$ \\
+\midrule
+\multirow{6}{*}{\shortstack[l]{Positive\\$28.7\%$ wrong}} & Right lung: skewness & $1$ & $\mathbf{-0.077}$ & $-0.019$ & $-0.070$ & $-0.172$ & $-0.014$ \\
+ & Diaphragm: bbox height & $3$ & $\mathbf{0.068}$ & $0.042$ & $0.045$ & $0.088$ & $0.038$ \\
+ & Left scapula: 90th percentile & $16$ & $\mathbf{-0.050}$ & $-0.025$ & $-0.036$ & $-0.092$ & $-0.016$ \\
+ & Left lung: 90th percentile & $19$ & $\mathbf{-0.043}$ & $-0.037$ & $-0.013$ & $-0.031$ & $-0.033$ \\
+ & Right lung: 10th percentile & $22$ & $0.038$ & $0.008$ & $\mathbf{0.042}$ & $0.089$ & $0.010$ \\
+\cmidrule(l){2-8}
+ & \textit{Mean} $|r|$ &  & $0.055$ & $0.026$ & $0.041$ & $0.094$ & $0.022$ \\
+\midrule
+\multirow{6}{*}{\shortstack[l]{Negative\\$12.1\%$ wrong}} & Heart: minimum & $1$ & $\mathbf{-0.113}$ & $-0.094$ & $-0.016$ & $-0.381$ & $0.015$ \\
+ & Right hilum: median & $4$ & $\mathbf{-0.102}$ & $-0.088$ & $-0.027$ & $-0.299$ & $-0.004$ \\
+ & Heart: interquartile range & $9$ & $\mathbf{0.100}$ & $0.077$ & $0.043$ & $0.323$ & $-0.008$ \\
+ & Left scapula: 90th percentile & $10$ & $\mathbf{0.097}$ & $0.085$ & $0.029$ & $0.228$ & $0.023$ \\
+ & Right lung: skewness & $11$ & $\mathbf{0.096}$ & $0.072$ & $0.022$ & $0.257$ & $0.012$ \\
+\cmidrule(l){2-8}
+ & \textit{Mean} $|r|$ &  & $0.102$ & $0.083$ & $0.028$ & $0.298$ & $0.012$ \\
+\bottomrule
+\end{tabular}
+\begin{tablenotes}\footnotesize
+\item Within each side, attributes are ranked by $|r|$ of their strongest form, and an attribute is kept only if its $|r|$ with every attribute already kept is below $0.6$ (on the image values). Rank: place in the full ranking of all attributes; gaps are attributes skipped as redundant. $r$ with correctness: point-biserial correlation of the image's value (I), its counterfactual's (Cf) and their difference (D); bold marks the strongest form, which the MSP columns use. Positive $r$: higher values go with correct calls. Relation to MSP: $r$ is the strongest form's correlation with threshold MSP on the same calls; partial $r$ is its correlation with correctness with MSP held fixed, i.e. what the attribute says beyond $C_0$'s own confidence. Mean $|r|$: mean absolute value over the five attributes of that side. Percentages: share of that side's calls $C_0$ gets wrong.
+\end{tablenotes}
+\end{threeparttable}
+\end{table}

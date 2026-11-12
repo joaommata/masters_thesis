@@ -89,6 +89,7 @@ DATASETS = {
     "chexpert": dict(
         c2_csv        = f"{RESULTS_DIR}/C2_custom/effusion/c2_data.csv",
         threshold_txt = f"{RESULTS_DIR}/C0_custom/effusion/threshold.txt",
+        c0_model      = f"{RESULTS_DIR}/C0_custom/effusion/c0_best.pt",
         output_dir    = f"{RESULTS_DIR}/diverse_cf",
         image_root    = None,       # paths in c2_data.csv are already DATA_ROOT-relative
         image_suffix  = "",
@@ -114,6 +115,7 @@ DATASETS = {
         # ChestMNIST (NIH ChestX-ray14), same effusion task, 224x224 PNGs.
         c2_csv        = f"{RESULTS_DIR}/C2_medmnist/effusion/c2_data.csv",
         threshold_txt = f"{RESULTS_DIR}/C0_medmnist/effusion/threshold.txt",   # 0.0908
+        c0_model      = f"{RESULTS_DIR}/C0_medmnist/effusion/c0_best.pt",
         output_dir    = f"{RESULTS_DIR}/diverse_cf_medmnist",
         # c2_data.csv paths look like "test/000000" — need a root and a .png suffix.
         image_root    = f"{DATA_ROOT}/medmnist/images",
@@ -121,6 +123,51 @@ DATASETS = {
         # NOT calibrated yet — run --dataset medmnist --calibrate-regions first.
         # The C0 threshold is 0.0908 (vs CheXpert's 0.5634), i.e. a very different decision
         # landscape, so CheXpert's values are not a safe default.
+        guidance_weight = None,
+        t_start_values  = None,
+    ),
+    "pneumothorax": dict(
+        # Same CheXpert images and same diffusion prior as "chexpert" — only the C0 head
+        # and its threshold differ (0.2982 vs 0.5634), so this is a drop-in apart from
+        # calibration. Region set is reused unchanged (see REGIONS): Spine stays the
+        # negative control, but note it was chosen as *effusion*-irrelevant. Pneumothorax
+        # is an apical/pleural-edge pathology, so the diaphragm > lung ordering that held
+        # for effusion is not expected to reproduce — that ordering is a result to read off
+        # the fingerprint here, not an assumption.
+        c2_csv        = f"{RESULTS_DIR}/C2_custom/pneumothorax/c2_data.csv",
+        threshold_txt = f"{RESULTS_DIR}/C0_custom/pneumothorax/threshold.txt",  # 0.2982
+        c0_model      = f"{RESULTS_DIR}/C0_custom/pneumothorax/c0_best.pt",
+        output_dir    = f"{RESULTS_DIR}/diverse_cf_pneumothorax",
+        image_root    = None,       # CheXpert-v1.0-small/... — already DATA_ROOT-relative
+        image_suffix  = "",
+        # NOT calibrated — run --dataset pneumothorax --calibrate-regions first.
+        # A lower threshold (0.2982) means less headroom above the boundary, so effusion's
+        # w=0.05 is not transferable even though the images and prior are identical.
+        guidance_weight = None,
+        t_start_values  = None,
+    ),
+    "rsna": dict(
+        # RSNA Pneumonia (binary: Lung Opacity vs Normal). Two things make this the least
+        # drop-in of the four:
+        #   1. Images are 16-bit DICOM, not 8-bit JPEG -> loader="dicom" below.
+        #   2. The RePaint diffusion prior was trained on CheXpert, so inpainting RSNA is a
+        #      cross-domain application of the prior. Nothing here detects that; judge it
+        #      from the smoke test's realism and the general-CF flip rate before trusting
+        #      the grid.
+        # Spine-as-control is also weaker here: pneumonia opacities are not confined the way
+        # effusion is, so a "control" region can legitimately carry signal.
+        c2_csv        = f"{RESULTS_DIR}/C2_custom/rsna_pneumonia/c2_data.csv",
+        threshold_txt = f"{RESULTS_DIR}/C0_custom/rsna_pneumonia/threshold.txt",  # 0.4517
+        c0_model      = f"{RESULTS_DIR}/C0_custom/rsna_pneumonia/c0_best.pt",
+        output_dir    = f"{RESULTS_DIR}/diverse_cf_rsna",
+        # c2_data.csv stores "mdai_rsna_project_.../....dcm" relative to the work3 data root.
+        # Pinned to work3 rather than DATA_ROOT because stage_chexpert.sh repoints
+        # THESIS_DATA at a node-local dir that holds CheXpert only — RSNA jobs must not
+        # source it, and this makes that mistake fail loudly instead of silently.
+        image_root    = "/work3/s251710/thesis_data",
+        image_suffix  = "",
+        loader        = "dicom",
+        # NOT calibrated — run --dataset rsna --calibrate-regions first.
         guidance_weight = None,
         t_start_values  = None,
     ),
@@ -133,6 +180,7 @@ THRESHOLD_TXT = DATASETS["chexpert"]["threshold_txt"]
 OUTPUT_DIR    = DATASETS["chexpert"]["output_dir"]
 IMAGE_ROOT    = DATASETS["chexpert"]["image_root"]
 IMAGE_SUFFIX  = DATASETS["chexpert"]["image_suffix"]
+IMAGE_LOADER  = "pil"
 
 GUIDANCE_WEIGHT = 0.05
 N_PER_CELL      = 1000      # balanced 1000/cell across (pred x correct) -> 4000 images
@@ -186,7 +234,7 @@ def configure_dataset(name):
     so an uncalibrated dataset can never silently inherit CheXpert's regime.
     """
     global DATASET, C2_DATA_CSV, THRESHOLD_TXT, OUTPUT_DIR, IMAGE_ROOT, IMAGE_SUFFIX
-    global GUIDANCE_WEIGHT, T_START_VALUES, FLIP_THRESHOLD
+    global GUIDANCE_WEIGHT, T_START_VALUES, FLIP_THRESHOLD, IMAGE_LOADER
 
     if name not in DATASETS:
         raise ValueError(f"unknown dataset {name!r}; choose from {list(DATASETS)}")
@@ -198,6 +246,15 @@ def configure_dataset(name):
     OUTPUT_DIR    = cfg["output_dir"]
     IMAGE_ROOT    = cfg["image_root"]
     IMAGE_SUFFIX  = cfg["image_suffix"]
+    IMAGE_LOADER  = cfg.get("loader", "pil")
+
+    # cf_generation.C0_MODEL_PATH is a module-level constant pinned to the EFFUSION
+    # checkpoint, and load_models() reads it at call time. Without this rebind every
+    # dataset silently guides with the effusion classifier while being scored against its
+    # own threshold — which is how the 2026-07-23 pneumothorax calibration and RSNA smoke
+    # runs (jobs 28939860 / 28939859) came out meaningless. Rebind BEFORE load_models().
+    import cf_generation as _cf_gen
+    _cf_gen.C0_MODEL_PATH = cfg["c0_model"]
 
     if cfg["guidance_weight"] is not None:
         GUIDANCE_WEIGHT = cfg["guidance_weight"]
@@ -209,24 +266,64 @@ def configure_dataset(name):
 
     print(f"Dataset: {name}  |  threshold={FLIP_THRESHOLD:.4f}  |  "
           f"w={cfg['guidance_weight']}  t_start={cfg['t_start_values']}")
+    print(f"C0 classifier: {cfg['c0_model']}")
     return cfg
+
+
+def load_dicom_gray224(full_path):
+    """
+    Read a DICOM to a 224x224 float32 array in [0,1].
+
+    The per-image min-max stretch to 0..255 followed by a uint8 round-trip is NOT
+    incidental — it is exactly what the RSNA C0 does
+    (c0_custom_predictions_densenet121_rsna.py, c0_train_densenet121_rsna.py):
+
+        arr = dcmread(...).pixel_array.astype(float32)
+        arr = (arr - lo) / (hi - lo) * 255      # per-image, not a fixed window
+        Image.fromarray(arr.astype(uint8))
+
+    Reproduce it bit-for-bit or the CF trajectory starts from a probability that
+    disagrees with c2_data.csv's `prob`, and every flip statistic is measured against
+    the wrong origin. In particular: keep the uint8 quantisation (do not stay in
+    float), and rescale before the resize, not after.
+    """
+    import pydicom
+    arr = pydicom.dcmread(full_path).pixel_array.astype(np.float32)
+    lo, hi = arr.min(), arr.max()
+    arr = (arr - lo) / (hi - lo) * 255.0 if hi > lo else np.zeros_like(arr)
+    img = Image.fromarray(arr.astype(np.uint8)).convert("L")
+    img = img.resize((224, 224), Image.BILINEAR)   # match C0's transforms.Resize
+    return np.array(img).astype(np.float32) / 255.0
 
 
 def load_image_ds(rel_path):
     """
     Load an image as a (1,1,224,224) tensor in [-1,1], honouring the active dataset.
 
-    cf_generation.load_image joins against DATA_ROOT and takes a full relative path, which
-    is right for CheXpert. MedMNIST's c2_data.csv stores bare keys like "test/000000", so
-    it needs its own root and a .png suffix. Identical preprocessing either way
-    (grayscale, LANCZOS to 224, [0,1] -> [-1,1]).
-    """
-    if IMAGE_ROOT is None:
-        return load_image(rel_path)                       # CheXpert: reuse as-is
+    Paths differ per dataset: CheXpert/pneumothorax store a DATA_ROOT-relative path,
+    MedMNIST stores bare keys like "test/000000" (own root + .png), RSNA stores DICOM.
 
-    full = os.path.join(IMAGE_ROOT, rel_path + IMAGE_SUFFIX)
-    img = Image.open(full).convert("L").resize((224, 224), Image.LANCZOS)
-    arr = np.array(img).astype(np.float32) / 255.0
+    RESIZE FILTER — must be BILINEAR, matching transforms.Resize((224,224)) in the C0
+    prediction scripts. Verified 2026-07-23 on effusion, recomputing C0 prob from this
+    loader and comparing against c2_data.csv:
+        bilinear : worst |diff| 6.8e-05   (exact up to float noise)
+        LANCZOS  : worst |diff| 6.0e-02
+    A 0.06 drift is enough to put an image on the wrong side of a 0.5634 threshold, which
+    would make `flipped` disagree with the classifier it is supposed to describe.
+
+    Deliberately does NOT delegate to cf_generation.load_image, which still uses LANCZOS
+    and is shared with the older cf_generate_diffusion_counterfactuals.py path (the cf_3 /
+    cf_16 C2 data). Changing it there would silently shift those results too; it carries
+    the same bug and should be fixed separately, with its consumers regenerated.
+    """
+    root = DATA_ROOT if IMAGE_ROOT is None else IMAGE_ROOT
+    full = os.path.join(root, rel_path + IMAGE_SUFFIX)
+
+    if IMAGE_LOADER == "dicom":
+        arr = load_dicom_gray224(full)
+    else:
+        img = Image.open(full).convert("L").resize((224, 224), Image.BILINEAR)
+        arr = np.array(img).astype(np.float32) / 255.0
     t = torch.from_numpy(arr).unsqueeze(0).unsqueeze(0)
     return (t * 2.0 - 1.0).to(DEVICE)
 

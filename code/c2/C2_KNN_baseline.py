@@ -16,6 +16,12 @@ Outputs saved to:
 """
 
 import os
+
+# Shared C0-derived exclusion list (margin + SDN internal-classifier probs)
+# — see c2_feature_spec for why these must not enter the attribute space.
+import os as _os_fs, sys as _sys_fs
+_sys_fs.path.append(_os_fs.path.dirname(_os_fs.path.abspath(__file__)))
+from c2_feature_spec import C0_DERIVED_COLS, RSNA_META_COLS
 import sys
 import json
 import numpy as np
@@ -52,7 +58,8 @@ print(f"  Incorrect: {(full_df['correct']==0).sum():,}\n")
 # Identify attribute columns (same logic as rest of pipeline)
 disease_pred_col = f'{DISEASE}_pred'
 meta_cols = {f'{DISEASE}_prob', disease_pred_col, f'{DISEASE}_true',
-             'correct', 'path', 'patient_id'}
+             'correct', 'path', 'patient_id',
+                 *C0_DERIVED_COLS, *RSNA_META_COLS}
 attr_cols = [c for c in full_df.columns
              if c not in meta_cols
              and not c.startswith('emb_')]

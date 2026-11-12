@@ -1,0 +1,24 @@
+\begin{table}[htbp]
+\centering
+\small
+\caption{Composition of the attribute vector. Each image is described by 461 attributes: its demographics as predicted from the image, the geometry and radiomics of 14 segmented anatomical regions, and 7 clinical ratios.}
+\label{tab:attribute_vector}
+\begin{threeparttable}
+\begin{tabular}{llcr}
+\toprule
+Attribute family & Attributes & Per region & Dim. \\
+\midrule
+Demographic & age; sex (2); race (3) & -- & $6$ \\
+Geometric & area, bounding-box width / height / ratio, perimeter & $5$ & $70$ \\
+Clinical ratios & cardiothoracic, lung asymmetry (3), lung fractions (2), mediastinal & -- & $7$ \\
+Radiomic: shape & elongation, axis lengths, diameter, sphericity, \dots & $9$ & $126$ \\
+Radiomic: intensity & mean, median, entropy, skewness, energy, \dots & $18$ & $252$ \\
+\midrule
+\textbf{Total} &  &  & $\mathbf{461}$ \\
+\bottomrule
+\end{tabular}
+\begin{tablenotes}\footnotesize
+\item Per region: number of attributes extracted for each of the 14 regions (left and right clavicle, left and right scapula, left and right lung, left and right hilum, heart, diaphragm, mediastinum, trachea and oesophagus, spine, aorta). A region the segmenter does not find has all its attributes set to $0$. Geometric attributes are measured on the segmentation mask; radiomic ones on the image under the mask (pyradiomics, shape in 2D and first-order statistics; no texture). Clinical ratios are computed from the geometric attributes of the lungs, heart and mediastinum.
+\end{tablenotes}
+\end{threeparttable}
+\end{table}

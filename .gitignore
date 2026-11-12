@@ -6,3 +6,23 @@ output/
 configs/
 FastDiME_Med/
 code/bash/
+jobs/
+# large derived tables symlinked in from work3
+final_experiment/*_attributes.csv
+
+# python / editor cruft
+__pycache__/
+*.pyc
+.vscode/
+notebooks/.cache/
+
+# heavy, regenerable outputs (code to rebuild them is tracked)
+final_experiment/figures/xai/
+final_experiment/figures/slides/
+final_experiment/figures/gradcam/
+block_ablation_results/
+notebooks/images/
+notebooks/impact_texture_features.ipynb
+
+# thesis LaTeX source (kept separately)
+MSc_Dissertation-15/

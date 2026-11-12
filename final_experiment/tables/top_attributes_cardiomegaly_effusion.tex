@@ -1,0 +1,55 @@
+\begin{table}[htbp]
+\centering
+\small
+\caption{Cardiomegaly and effusion: the five non-redundant attributes most correlated with $C_0$'s correctness, per $C_0$ prediction (KNN counterfactuals, nearest counterfactual, all folds pooled).}
+\label{tab:top_attributes_cardiomegaly_effusion}
+\begin{threeparttable}
+\begin{tabular}{llrccccc}
+\toprule
+& & & \multicolumn{3}{c}{$r$ with correctness} & \multicolumn{2}{c}{Relation to MSP} \\
+\cmidrule(lr){4-6} \cmidrule(l){7-8}
+$C_0$ prediction & Attribute & Rank & I & Cf & D & $r$ & Partial $r$ \\
+\midrule
+\multicolumn{8}{l}{\textbf{Cardiomegaly}} \\
+\cmidrule(r){1-8}
+\multirow{6}{*}{\shortstack[l]{Positive\\$62.7\%$ wrong}} & Heart: pixel surface & $1$ & $\mathbf{0.184}$ & $0.093$ & $0.177$ & $0.302$ & $0.067$ \\
+ & Left lung: skewness & $14$ & $\mathbf{-0.112}$ & $-0.056$ & $-0.058$ & $-0.231$ & $-0.018$ \\
+ & Left lung: kurtosis & $16$ & $\mathbf{-0.082}$ & $-0.049$ & $-0.034$ & $-0.164$ & $-0.016$ \\
+ & Right lung: major axis length & $18$ & $\mathbf{0.079}$ & $0.048$ & $0.048$ & $0.119$ & $0.033$ \\
+ & Mediastinum: bbox width & $19$ & $0.065$ & $\mathbf{0.072}$ & $0.004$ & $0.090$ & $0.038$ \\
+\cmidrule(l){2-8}
+ & \textit{Mean} $|r|$ &  & $0.104$ & $0.063$ & $0.064$ & $0.181$ & $0.034$ \\
+\midrule
+\multirow{6}{*}{\shortstack[l]{Negative\\$4.0\%$ wrong}} & Mediastinum: elongation & $1$ & $\mathbf{-0.058}$ & $-0.032$ & $-0.030$ & $-0.199$ & $-0.024$ \\
+ & Heart: minimum & $2$ & $\mathbf{-0.056}$ & $-0.045$ & $-0.019$ & $-0.146$ & $-0.032$ \\
+ & Left lung: skewness & $3$ & $\mathbf{0.056}$ & $0.031$ & $0.028$ & $0.193$ & $0.023$ \\
+ & Heart: pixel surface & $4$ & $-0.051$ & $-0.007$ & $\mathbf{-0.055}$ & $-0.205$ & $-0.020$ \\
+ & Left hilum: median & $8$ & $\mathbf{-0.053}$ & $-0.023$ & $-0.036$ & $-0.176$ & $-0.023$ \\
+\cmidrule(l){2-8}
+ & \textit{Mean} $|r|$ &  & $0.055$ & $0.028$ & $0.033$ & $0.184$ & $0.025$ \\
+\midrule
+\addlinespace
+\multicolumn{8}{l}{\textbf{Effusion}} \\
+\cmidrule(r){1-8}
+\multirow{6}{*}{\shortstack[l]{Positive\\$28.7\%$ wrong}} & Right lung: skewness & $1$ & $\mathbf{-0.077}$ & $-0.019$ & $-0.070$ & $-0.172$ & $-0.014$ \\
+ & Diaphragm: bbox height & $3$ & $\mathbf{0.068}$ & $0.042$ & $0.045$ & $0.088$ & $0.038$ \\
+ & Left scapula: 90th percentile & $16$ & $\mathbf{-0.050}$ & $-0.025$ & $-0.036$ & $-0.092$ & $-0.016$ \\
+ & Left lung: 90th percentile & $19$ & $\mathbf{-0.043}$ & $-0.037$ & $-0.013$ & $-0.031$ & $-0.033$ \\
+ & Right lung: 10th percentile & $22$ & $0.038$ & $0.008$ & $\mathbf{0.042}$ & $0.089$ & $0.010$ \\
+\cmidrule(l){2-8}
+ & \textit{Mean} $|r|$ &  & $0.055$ & $0.026$ & $0.041$ & $0.094$ & $0.022$ \\
+\midrule
+\multirow{6}{*}{\shortstack[l]{Negative\\$12.1\%$ wrong}} & Heart: minimum & $1$ & $\mathbf{-0.113}$ & $-0.094$ & $-0.016$ & $-0.381$ & $0.015$ \\
+ & Right hilum: median & $4$ & $\mathbf{-0.102}$ & $-0.088$ & $-0.027$ & $-0.299$ & $-0.004$ \\
+ & Heart: interquartile range & $9$ & $\mathbf{0.100}$ & $0.077$ & $0.043$ & $0.323$ & $-0.008$ \\
+ & Left scapula: 90th percentile & $10$ & $\mathbf{0.097}$ & $0.085$ & $0.029$ & $0.228$ & $0.023$ \\
+ & Right lung: skewness & $11$ & $\mathbf{0.096}$ & $0.072$ & $0.022$ & $0.257$ & $0.012$ \\
+\cmidrule(l){2-8}
+ & \textit{Mean} $|r|$ &  & $0.102$ & $0.083$ & $0.028$ & $0.298$ & $0.012$ \\
+\bottomrule
+\end{tabular}
+\begin{tablenotes}\footnotesize
+\item Within each $C_0$ prediction, attributes are ranked by $|r|$ of their strongest form, and an attribute is kept only if its $|r|$ with every attribute already kept is below $0.6$ (on the image values). Rank: place in the full ranking of all attributes; gaps are attributes skipped as redundant. $r$ with correctness: point-biserial correlation of the image's value (I), its counterfactual's (Cf) and their difference (D); bold marks the strongest form, which the MSP columns use. Positive $r$: higher values go with correct predictions. Relation to MSP: $r$ is the strongest form's correlation with threshold MSP on the same predictions; partial $r$ is its correlation with correctness with MSP held fixed, i.e. what the attribute says beyond $C_0$'s own confidence. Mean $|r|$: mean absolute value over the five attributes. Percentages: share of $C_0$'s positive or negative predictions that are wrong.
+\end{tablenotes}
+\end{threeparttable}
+\end{table}

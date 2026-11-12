@@ -67,6 +67,7 @@ CONFIGS     = ['B1','B2','B3','B4','B5','M1','M2','M3','M4','M5','M6']
 #CONFIGS = ['M6']  # For quick testing, comment out to run all configs
 # Map backbone name → results subdirectory
 BACKBONE_MAP = {
+    'final':     'C2_final',   # final_experiment rebuild (c2_build_dataset.py)
     'densenet': 'C2_custom',
     'resnet50': 'C2_resnet50',
     'vit':      'C2_vit',

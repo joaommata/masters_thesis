@@ -83,7 +83,9 @@ SEED         = args.seed
 DATA_ROOT   = os.environ.get("THESIS_DATA", "/work3/s251710/thesis_data")
 RESULTS_DIR = "/work3/s251710/thesis_results"
 DATA_DIR   = DATA_ROOT
-CV_DIR     = os.path.join(RESULTS_DIR, f"C2_custom_corrected/{DISEASE}/cv_results_correct_cf/cf_{CF_COUNT}")
+
+
+CV_DIR     = os.path.join(RESULTS_DIR, f"C2_custom_corrected/{DISEASE}/cv_results_cf_ensemble/cf_{CF_COUNT}/TEST_entropy")
 C2_DATA_CSV = os.path.join(RESULTS_DIR, f"C2_custom/{DISEASE}/c2_data.csv")
 RES_BASE   = os.path.join(RESULTS_DIR, "C2_cnn")
 CAM_BASE   = os.path.join(RESULTS_DIR, f"C0_custom/{DISEASE}/gradcam")
@@ -172,6 +174,7 @@ def _attach_scalar_cols(fold_dfs):
         df['query_prob'] = df[f'{DISEASE}_prob']
         df['cf_probs'] = df['cf_paths'].map(
             lambda v: '|'.join(str(lookup[p]) for p in _split_cf_paths(v)))
+
 
 
 # ── Datasets ───────────────────────────────────────────────────────────────────
@@ -486,6 +489,60 @@ def make_weighted_bce(pos_weight):
     return loss_fn
 
 
+# Savinf the (xi,cf) embeddings pair for K counterfactuals per sample 
+
+def _embed_pairs(model, loader, encoder_names, df, device):
+    """Per-(xi, cf) pre-head embeddings — NO pooling over K — keyed by paths.
+
+    Emits ONE row per (sample, CF): K rows per sample, in the SAME
+    sample-major / CF-minor order _stack_cf_inputs uses, so the keys pulled
+    from `df` (which the eval loader iterates in order, shuffle=False) line up
+    row-for-row with the embeddings. Join your tabular features on
+    (sample_path, cf_path).
+
+    Returns:
+        embs       : (sum_i K_i, D) float32 — D = 1024 * len(encoder_names)
+        labels     : (sum_i K_i,)
+        sample_paths : (sum_i K_i,) object — query image path, repeated K times
+        cf_paths     : (sum_i K_i,) object — the specific CF path for that row
+    """
+    model.eval()
+    encoders = [getattr(model, n) for n in encoder_names]
+    embs, labels = [], []
+    n_streams = len(encoder_names)
+    with torch.no_grad(), autocast():
+        for batch in loader:
+            streams = batch[:n_streams]          # image streams only; ignores scalars/label
+            flat, b, k = _stack_cf_inputs(*[s.to(device) for s in streams])
+            emb = torch.cat([e(x) for e, x in zip(encoders, flat)], dim=1).float()
+            embs.append(emb.cpu().numpy())
+            labels.append(np.repeat(batch[-1].numpy(), k))   # label is always last
+    embs   = np.vstack(embs)
+    labels = np.concatenate(labels)
+
+    # Build the keys from df in the identical order. Each row contributes its
+    # query path K times and its K CF paths once each, CF-minor — matching how
+    # _stack_cf_inputs expands (B,3,H,W) query streams and flattens (B,K,...)
+    # CF streams. This assumes the loader was built shuffle=False on THIS df.
+    sample_paths, cf_paths = [], []
+    for _, row in df.iterrows():
+        cfs = _split_cf_paths(row['cf_paths'])
+        sample_paths.extend([str(row['path'])] * len(cfs))
+        cf_paths.extend(cfs)
+    sample_paths = np.asarray(sample_paths, dtype=object)
+    cf_paths     = np.asarray(cf_paths,     dtype=object)
+    assert cf_paths[0] == _split_cf_paths(df.iloc[0]['cf_paths'])[0], \
+        "key ordering drift — first reconstructed CF path doesn't match df row 0"
+
+    # Fail loud if the key count and embedding count disagree — this is the
+    # exact place a K-ordering or shuffle mismatch would silently corrupt the
+    # join, and you've been bitten by routing-alignment bugs before.
+    assert len(sample_paths) == len(embs), (
+        f"key/embedding count mismatch: {len(sample_paths)} keys vs {len(embs)} rows "
+        "— check the loader is shuffle=False on this exact df and K is consistent."
+    )
+    return embs, labels, sample_paths, cf_paths
+
 # ── Train / eval — single input ────────────────────────────────────────────────
 def _train_single(model, loader, optimizer, criterion, device, scaler):
     model.train()
@@ -624,63 +681,6 @@ def _eval_quad_scalars(model, loader, device):
     return roc_auc_score(labels, probs), probs, labels
 
 
-# ── Embedding extraction ───────────────────────────────────────────────────────
-# These save one feature vector per sample for downstream analysis (separate
-# from how the classifier ensembles predictions above). When a stream carries
-# K counterfactuals, its per-CF embeddings are mean-pooled into one vector.
-def _encode_pooled(encoder, x):
-    """Encode `x` with `encoder`; if x is (B,K,3,H,W), mean-pool over K."""
-    if x.dim() == 5:
-        b, k = x.shape[:2]
-        emb = encoder(x.reshape(b * k, *x.shape[2:]))
-        return emb.view(b, k, -1).mean(dim=1)
-    return encoder(x)
-
-
-def _embed_single(model, loader, device):
-    """Extract 1024-dim DenseNet features before the linear classifier."""
-    model.eval()
-    embs, labels = [], []
-    with torch.no_grad(), autocast():
-        for imgs, lbls in loader:
-            emb = _encode_pooled(model.enc, imgs.to(device)).float()
-            embs.append(emb.cpu().numpy())
-            labels.extend(lbls.numpy())
-    return np.vstack(embs), np.array(labels)
-
-
-def _embed_dual(model, loader, device):
-    """Extract concatenated encoder embeddings (2048-dim) before the MLP head."""
-    model.eval()
-    embs, labels = [], []
-    with torch.no_grad(), autocast():
-        for a_imgs, b_imgs, lbls in loader:
-            emb = torch.cat([
-                _encode_pooled(model.query_enc, a_imgs.to(device)),
-                _encode_pooled(model.cf_enc, b_imgs.to(device)),
-            ], dim=1).float()
-            embs.append(emb.cpu().numpy())
-            labels.extend(lbls.numpy())
-    return np.vstack(embs), np.array(labels)
-
-
-def _embed_quad(model, loader, device):
-    """Extract concatenated encoder embeddings (4096-dim) before the MLP head."""
-    model.eval()
-    embs, labels = [], []
-    with torch.no_grad(), autocast():
-        for q, cf, qcam, cfcam, lbls in loader:
-            emb = torch.cat([
-                _encode_pooled(model.query_enc, q.to(device)),
-                _encode_pooled(model.cf_enc, cf.to(device)),
-                _encode_pooled(model.qcam_enc, qcam.to(device)),
-                _encode_pooled(model.cfcam_enc, cfcam.to(device)),
-            ], dim=1).float()
-            embs.append(emb.cpu().numpy())
-            labels.extend(lbls.numpy())
-    return np.vstack(embs), np.array(labels)
-
-
 # ── CV runner ──────────────────────────────────────────────────────────────────
 def run_cv(name, fold_dfs, dataset_cls, make_model, output_dir, mode='single'):
     """
@@ -751,6 +751,29 @@ def run_cv(name, fold_dfs, dataset_cls, make_model, output_dir, mode='single'):
 
         fold_auc, fold_probs, fold_labels = eval_fn(model, test_loader, DEVICE)
         fpr, tpr, _ = roc_curve(fold_labels, fold_probs)
+        
+        # Save the (xi, cf) embeddings for the test fold, keyed by paths, so
+        # they can be joined with tabular features for downstream fusion. Only
+        # the test fold is saved per fold -> concatenating all 5 files yields
+        # each sample exactly once as an honest out-of-fold feature for THIS CV
+        # split. For 'quad_scalars' we deliberately save only the image-encoder
+        # concat (4*1024), NOT the 32-dim scalar embedding: the C0 scalars are
+        # re-attached tabular-side during fusion, so dual_sal and
+        # dual_sal_scalars embeddings share the same dimensionality and differ
+        # only by trained weights.
+        ENCODER_NAMES = {'single': ['enc'],
+                     'dual':   ['query_enc', 'cf_enc'],
+                     'quad':   ['query_enc', 'cf_enc', 'qcam_enc', 'cfcam_enc'],
+                     'quad_scalars': ['query_enc', 'cf_enc', 'qcam_enc', 'cfcam_enc']}
+        emb, emb_lbl, s_paths, c_paths = _embed_pairs(
+            model, test_loader, ENCODER_NAMES[mode], test_df, DEVICE)
+        # Self-describing metadata so the downstream loader never has to infer
+        # the config, K, or embedding width from shapes/paths.
+        np.savez(os.path.join(output_dir, f'fold_{test_fold}_pair_embeddings.npz'),
+                emb=emb, labels=emb_lbl, sample_paths=s_paths, cf_paths=c_paths,
+                mode=mode, encoder_names=np.asarray(ENCODER_NAMES[mode], dtype=object),
+                emb_dim=emb.shape[1], cf_count=CF_COUNT, disease=DISEASE,
+                config=name, fold=test_fold)
 
         np.save(os.path.join(output_dir, f'fold_{test_fold}_fpr.npy'),    fpr)
         np.save(os.path.join(output_dir, f'fold_{test_fold}_tpr.npy'),    tpr)
@@ -777,44 +800,23 @@ def run_cv(name, fold_dfs, dataset_cls, make_model, output_dir, mode='single'):
                   for r in cv_results]).to_csv(os.path.join(output_dir, 'cv_summary.csv'), index=False)
     with open(os.path.join(output_dir, 'cv_detailed.json'), 'w') as f:
         json.dump(cv_results, f, indent=2)
-
+    
     print(f"\n[{name}] Mean AUC: {np.mean(fold_aucs):.4f} ± {np.std(fold_aucs):.4f}")
     print(f"[{name}] Saved to {output_dir}")
     return fold_aucs
 
 
-# ── Main ───────────────────────────────────────────────────────────────────────
-if __name__ == '__main__':
+# ── Config registry ─────────────────────────────────────────────────────────────
+# results/C2_cnn/{disease}/late/{config}/cf_{K}/ — "late" distinguishes this
+# script's outputs from c2_cnn_early_fusion.py's under the same RES_BASE; config
+# names match 1:1 across both scripts.
+out = lambda name: os.path.join(RES_BASE, DISEASE, 'late', name, f'cf_{CF_COUNT}')
 
-    fold_dfs = [
-    pd.read_csv(os.path.join(CV_DIR, f'fold_{i}_predictions.csv'))
-    for i in range(N_FOLDS)
-]
-
-    # Outer folds are inherited from the tabular CV pipeline's patient-grouped
-    # split — verify that assumption instead of trusting it silently.
-    for i in range(N_FOLDS):
-        for j in range(i + 1, N_FOLDS):
-            overlap = set(fold_dfs[i]['patient_id']) & set(fold_dfs[j]['patient_id'])
-            assert len(overlap) == 0, (
-                f"Patient overlap between outer folds {i} and {j}: {len(overlap)}. "
-                "Regenerate fold_*_predictions.csv with the group-aware pipeline first."
-            )
-    print(f"Verified: zero patient overlap across {N_FOLDS} outer folds")
-
-    # Scalar configs need per-CF C0 probabilities, recovered by path lookup
-    # from c2_data.csv (a wide file — only read it when actually needed).
-    if any(key.endswith('_scalars') for key in SELECTED):
-        _attach_scalar_cols(fold_dfs)
-
-    # results/C2_cnn/{disease}/late/{config}/cf_{K}/ — "late" distinguishes
-    # this script's outputs from c2_cnn_early_fusion.py's under the same
-    # RES_BASE; config names match 1:1 across both scripts.
-    out = lambda name: os.path.join(RES_BASE, DISEASE, 'late', name, f'cf_{CF_COUNT}')
-
-    # Registry of all six configurations. Each entry is the kwarg set passed
-    # straight to run_cv(). Only the keys listed in --models are executed.
-    MODEL_REGISTRY = {
+# Registry of all configurations. Each entry is the kwarg set passed straight to
+# run_cv(). Only the keys listed in --models are executed. Defined at module
+# scope so companion scripts (e.g. c2_cnn_extract_embeddings.py) can import it as
+# the single source of truth for how each config is built.
+MODEL_REGISTRY = {
         'xi': dict(
             name        = 'CNN Xi',
             dataset_cls = QueryDataset,
@@ -864,7 +866,32 @@ if __name__ == '__main__':
             output_dir  = out('dual_sal_scalars'),
             mode        = 'quad_scalars',
         ),
-    }
+}
+
+
+# ── Main ───────────────────────────────────────────────────────────────────────
+if __name__ == '__main__':
+
+    fold_dfs = [
+        pd.read_csv(os.path.join(CV_DIR, f'fold_{i}_predictions.csv'))
+        for i in range(N_FOLDS)
+    ]
+
+    # Outer folds are inherited from the tabular CV pipeline's patient-grouped
+    # split — verify that assumption instead of trusting it silently.
+    for i in range(N_FOLDS):
+        for j in range(i + 1, N_FOLDS):
+            overlap = set(fold_dfs[i]['patient_id']) & set(fold_dfs[j]['patient_id'])
+            assert len(overlap) == 0, (
+                f"Patient overlap between outer folds {i} and {j}: {len(overlap)}. "
+                "Regenerate fold_*_predictions.csv with the group-aware pipeline first."
+            )
+    print(f"Verified: zero patient overlap across {N_FOLDS} outer folds")
+
+    # Scalar configs need per-CF C0 probabilities, recovered by path lookup
+    # from c2_data.csv (a wide file — only read it when actually needed).
+    if any(key.endswith('_scalars') for key in SELECTED):
+        _attach_scalar_cols(fold_dfs)
 
     all_aucs = {}
     for key in SELECTED:

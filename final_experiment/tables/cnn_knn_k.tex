@@ -1,7 +1,7 @@
 \begin{table}[htbp]
 \centering
 \small
-\caption{AUROC for predicting C0 correctness with the image-based models (CNNs), using KNN counterfactuals and $K \in \{1,5,10\}$. Values are mean $\pm$ std over 5 CV folds. I: query image, Cf: counterfactual image, Dual: query and counterfactual (dual encoder), +S: with saliency map.}
+\caption{AUROC for predicting C0 correctness with the image-based models (CNNs), using KNN counterfactuals and $K \in \{1,5,10\}$. Values are mean $\pm$ std over 5 CV folds. I: query image, Cf: counterfactual image, Dual: query and counterfactual (dual encoder), +S: with saliency map. Stars on the $K=10$ cells: paired patient-level bootstrap of $K=10$ against $K=1$ (5000 replicates), Holm-adjusted across the five diseases within each model; ***~$p_{adj} < 0.001$, **~$p_{adj} < 0.01$, *~$p_{adj} < 0.05$; no star: not significant (I and I+S do not depend on $K$).}
 \label{tab:cnn_knn_k}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{llcccccc}
@@ -10,23 +10,23 @@ Disease & $K$ & Input (I) & I + Saliency (S) & Cf & Cf+S & Dual (I+Cf) & Dual+S 
 \midrule
 \multirow{3}{*}{Atelectasis} & 1 & \multirow{3}{*}{$0.786 \pm 0.006$} & \multirow{3}{*}{$0.831 \pm 0.003$} & $0.817 \pm 0.003$ & $0.826 \pm 0.004$ & $0.834 \pm 0.004$ & $\mathbf{0.852} \pm 0.004$ \\
  & 5 &  &  & $0.832 \pm 0.004$ & $0.832 \pm 0.004$ & $0.846 \pm 0.005$ & $\mathbf{0.856} \pm 0.006$ \\
- & 10 &  &  & $0.833 \pm 0.004$ & $0.832 \pm 0.003$ & $0.847 \pm 0.005$ & $\mathbf{0.856} \pm 0.006$ \\
+ & 10 &  &  & $0.833^{**} \pm 0.004$ & $0.832^{**} \pm 0.003$ & $0.847^{**} \pm 0.005$ & $\mathbf{0.856}^{**} \pm 0.006$ \\
 \midrule
 \multirow{3}{*}{Cardiomegaly} & 1 & \multirow{3}{*}{$0.862 \pm 0.002$} & \multirow{3}{*}{$0.903 \pm 0.003$} & $0.864 \pm 0.004$ & $0.872 \pm 0.003$ & $0.903 \pm 0.003$ & $\mathbf{0.914} \pm 0.003$ \\
  & 5 &  &  & $0.875 \pm 0.003$ & $0.876 \pm 0.003$ & $0.908 \pm 0.002$ & $\mathbf{0.916} \pm 0.003$ \\
- & 10 &  &  & $0.876 \pm 0.003$ & $0.878 \pm 0.004$ & $0.908 \pm 0.002$ & $\mathbf{0.916} \pm 0.003$ \\
+ & 10 &  &  & $0.876^{**} \pm 0.003$ & $0.878^{**} \pm 0.004$ & $0.908^{**} \pm 0.002$ & $\mathbf{0.916}^{**} \pm 0.003$ \\
 \midrule
 \multirow{3}{*}{Consolidation} & 1 & \multirow{3}{*}{$0.884 \pm 0.003$} & \multirow{3}{*}{$0.915 \pm 0.003$} & $0.926 \pm 0.002$ & $0.927 \pm 0.002$ & $0.936 \pm 0.002$ & $\mathbf{0.940} \pm 0.002$ \\
  & 5 &  &  & $0.931 \pm 0.003$ & $0.930 \pm 0.003$ & $0.938 \pm 0.004$ & $\mathbf{0.942} \pm 0.002$ \\
- & 10 &  &  & $0.931 \pm 0.003$ & $0.932 \pm 0.002$ & $0.938 \pm 0.004$ & $\mathbf{0.942} \pm 0.002$ \\
+ & 10 &  &  & $0.931^{**} \pm 0.003$ & $0.932^{**} \pm 0.002$ & $0.938^{**} \pm 0.004$ & $\mathbf{0.942}^{**} \pm 0.002$ \\
 \midrule
 \multirow{3}{*}{Edema} & 1 & \multirow{3}{*}{$0.762 \pm 0.004$} & \multirow{3}{*}{$0.818 \pm 0.005$} & $0.749 \pm 0.005$ & $0.771 \pm 0.003$ & $0.793 \pm 0.011$ & $\mathbf{0.828} \pm 0.003$ \\
  & 5 &  &  & $0.776 \pm 0.005$ & $0.783 \pm 0.004$ & $0.803 \pm 0.014$ & $\mathbf{0.831} \pm 0.004$ \\
- & 10 &  &  & $0.779 \pm 0.004$ & $0.786 \pm 0.004$ & $0.804 \pm 0.014$ & $\mathbf{0.831} \pm 0.004$ \\
+ & 10 &  &  & $0.779^{**} \pm 0.004$ & $0.786^{**} \pm 0.004$ & $0.804^{**} \pm 0.014$ & $\mathbf{0.831}^{**} \pm 0.004$ \\
 \midrule
 \multirow{3}{*}{Effusion} & 1 & \multirow{3}{*}{$0.749 \pm 0.005$} & \multirow{3}{*}{$0.770 \pm 0.004$} & $0.628 \pm 0.005$ & $0.649 \pm 0.004$ & $0.755 \pm 0.003$ & $\mathbf{0.777} \pm 0.005$ \\
  & 5 &  &  & $0.651 \pm 0.003$ & $0.657 \pm 0.001$ & $0.757 \pm 0.003$ & $\mathbf{0.777} \pm 0.005$ \\
- & 10 &  &  & $0.655 \pm 0.003$ & $0.658 \pm 0.001$ & $0.757 \pm 0.003$ & $\mathbf{0.778} \pm 0.005$ \\
+ & 10 &  &  & $0.655^{**} \pm 0.003$ & $0.658^{**} \pm 0.001$ & $0.757^{**} \pm 0.003$ & $\mathbf{0.778}^{**} \pm 0.005$ \\
 \bottomrule
 \end{tabular}}
 \end{table}

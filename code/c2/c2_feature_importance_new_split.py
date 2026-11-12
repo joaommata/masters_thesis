@@ -2,6 +2,12 @@
 # -*- coding: utf-8 -*-
 
 import os
+
+# Shared C0-derived exclusion list (margin + SDN internal-classifier probs)
+# — see c2_feature_spec for why these must not enter the attribute space.
+import os as _os_fs, sys as _sys_fs
+_sys_fs.path.append(_os_fs.path.dirname(_os_fs.path.abspath(__file__)))
+from c2_feature_spec import C0_DERIVED_COLS, RSNA_META_COLS
 import argparse
 import numpy as np
 import pandas as pd
@@ -47,7 +53,8 @@ CATEGORY_COLORS = {
 def build_feature_matrix(pred_df, disease, config):
     """Build feature matrix X and feature names for a given config."""
     meta_cols = {f'{disease}_prob', f'{disease}_pred', f'{disease}_true',
-                 'correct', 'path', 'patient_id', 'cf_prob', 'cf_paths'}
+                 'correct', 'path', 'patient_id', 'cf_prob', 'cf_paths',
+                 *C0_DERIVED_COLS, *RSNA_META_COLS}
     diff_cols = [c for c in pred_df.columns if c.startswith('delta_')]
     emb_cols  = [c for c in pred_df.columns if c.startswith('emb_')]
     attr_cols = [c for c in pred_df.columns if c not in meta_cols and not c.startswith('delta_') and not c.startswith('emb_')]

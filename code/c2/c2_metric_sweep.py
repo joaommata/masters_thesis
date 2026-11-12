@@ -20,6 +20,13 @@ Usage:
 """
 
 import sys
+
+# Shared C0-derived exclusion list (margin + SDN internal-classifier probs)
+# — see c2_feature_spec for why these must not enter the attribute space.
+import os as _os_fs, sys as _sys_fs
+_sys_fs.path.append(_os_fs.path.dirname(_os_fs.path.abspath(__file__)))
+from c2_feature_spec import C0_DERIVED_COLS, RSNA_META_COLS
+
 import os
 sys.path.insert(0, '/zhome/d0/a/221493/thesis/code')
 
@@ -48,6 +55,7 @@ EVAL_CONFIGS = ['B1', 'M3', 'MCF1', 'MCF2', 'MCF3']
 DATA_ROOT   = os.environ.get("THESIS_DATA", "/work3/s251710/thesis_data")
 RESULTS_DIR = "/work3/s251710/thesis_results"
 BACKBONE_MAP = {
+    'final':     'C2_final',   # final_experiment rebuild (c2_build_dataset.py)
     'densenet': 'C2_custom',
     'resnet50': 'C2_resnet50',
     'vit':      'C2_vit',
@@ -66,7 +74,8 @@ def _compute_cf_unmatched(train_df, test_df, cf_count, disease, metric='euclidea
     test_df  = add_clinical_ratios(test_df.copy())
 
     meta_cols     = {disease_prob_col, disease_pred_col, disease_true_col,
-                     'correct', 'path', 'patient_id'}
+                     'correct', 'path', 'patient_id',
+                 *C0_DERIVED_COLS, *RSNA_META_COLS}
     emb_cols      = [c for c in train_df.columns if c.startswith('emb_')]
     relevant_cols = [c for c in train_df.columns
                      if c not in meta_cols and c not in emb_cols]

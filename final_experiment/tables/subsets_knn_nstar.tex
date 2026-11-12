@@ -1,0 +1,19 @@
+\begin{table}[htbp]
+\centering
+\small
+\caption{Training rows KNN needs to match one diffusion counterfactual. Diffusion AUROC: the attribute model (I+Cf+D, probability-free) with one diffusion counterfactual ($K=1$), trained on the full 16k train side of the 20{,}000-image subset. Each KNN cell is the smallest training-set size $N$ (from 1k, 2k, 4k, 8k, 16k, 32k and the full pool, ``all'') at which the same model with $K$ retrieved neighbours reaches that AUROC. KNN draws its $N$ rows from the whole C2 set minus the test fold's patients and retrieves only from them. AUROC is computed out-of-fold over the 20{,}000-image subset (5-fold CV: each image is tested once, by the model whose fold held it out), with identical folds in every cell; both arms are averaged over 5 seeds.}
+\label{tab:subsets_knn_nstar}
+\begin{tabular}{lc|ccccc}
+\toprule
+& & \multicolumn{5}{c}{KNN training rows needed at $K =$} \\
+\cmidrule(l){3-7}
+Disease & Diffusion AUROC & 1 & 3 & 5 & 10 & 20 \\
+\midrule
+Atelectasis & $0.854$ & all (70k) & 32k & 16k & 16k & 16k \\
+Cardiomegaly & $0.910$ & all (80k) & 32k & 32k & 32k & 16k \\
+Consolidation & $0.941$ & all (73k) & 32k & 32k & 32k & 32k \\
+Edema & $0.824$ & all (78k) & 32k & 32k & 32k & 32k \\
+Effusion & $0.771$ & all (79k) & 32k & 32k & 32k & 16k \\
+\bottomrule
+\end{tabular}
+\end{table}

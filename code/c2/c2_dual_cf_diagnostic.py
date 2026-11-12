@@ -19,6 +19,11 @@ Usage:
 
 import sys
 import os
+
+# Shared C0-derived exclusion list (margin + SDN internal-classifier probs)
+# — see c2_feature_spec for why these must not enter the attribute space.
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from c2_feature_spec import C0_DERIVED_COLS, RSNA_META_COLS
 sys.path.insert(0, '/zhome/d0/a/221493/thesis/code')
 
 import argparse
@@ -33,6 +38,7 @@ from c2_prepare_data_simulated_cf import _get_disease_cols, add_clinical_ratios
 DATA_ROOT   = os.environ.get("THESIS_DATA", "/work3/s251710/thesis_data")
 RESULTS_DIR = "/work3/s251710/thesis_results"
 BACKBONE_MAP = {
+    'final':     'C2_final',   # final_experiment rebuild (c2_build_dataset.py)
     'densenet': 'C2_custom',
     'resnet50': 'C2_resnet50',
     'vit':      'C2_vit',
@@ -52,7 +58,8 @@ def _compute_dual_cf(df, cf_count, disease, metric='manhattan'):
     df = add_clinical_ratios(df.copy())
 
     meta_cols     = {disease_prob_col, disease_pred_col, disease_true_col,
-                     'correct', 'path', 'patient_id'}
+                     'correct', 'path', 'patient_id',
+                     *C0_DERIVED_COLS, *RSNA_META_COLS}
     emb_cols      = [c for c in df.columns if c.startswith('emb_')]
     relevant_cols = [c for c in df.columns if c not in meta_cols and c not in emb_cols]
 

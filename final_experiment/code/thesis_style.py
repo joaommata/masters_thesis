@@ -100,6 +100,72 @@ def panel_letter(ax, letter, x=-0.16, y=1.06):
             fontweight="bold", va="bottom", ha="left", color=INK)
 
 
+# ── Key figure: the average as one large panel, the diseases as small multiples beside it ──
+# Placed by hand, not by a layout engine: the disease grid has to fill exactly the height of
+# the key panel -- top-row titles level with its title, bottom-row tick labels level with its
+# tick labels -- and constrained/tight layout only spreads square panels apart.
+KEY_SIDE = 50 * MM          # the key panel's plot area; everything else is sized from it
+KEY_GAPS = dict(row=1.5 * MM, col=2.5 * MM, key=4 * MM)
+
+
+def _pads(fig, ax):
+    """(left, bottom, right, top) of the text around `ax`, in inches: tight bbox minus axes box."""
+    r  = fig.canvas.get_renderer()
+    to = fig.dpi_scale_trans.inverted()
+    t, a = ax.get_tightbbox(r).transformed(to), ax.get_window_extent(r).transformed(to)
+    return [a.x0 - t.x0, a.y0 - t.y0, t.x1 - a.x1, t.y1 - a.y1]
+
+
+def key_figure(panels, draw, legend, key="AVERAGE", ncols=3, side=KEY_SIDE, gaps=KEY_GAPS,
+               ylabel="AUROC (mean over folds)"):
+    """`key` drawn large on the left, the other `panels` in an ncols grid on the right sized
+    to span the key panel's height, the legend in the grid's empty cell (beneath the figure
+    if it is full). `draw(ax, panel, compact)` draws one panel; compact=True is a small one.
+    The canvas is generous: savefig.bbox="tight" crops it."""
+    small = [p for p in panels if p != key]
+    nrows = -(-len(small) // ncols)
+    W, H  = 220 * MM, side + 50 * MM
+    fig   = plt.figure(figsize=(W, H))
+    box   = lambda x, y, w, h: [x / W, y / H, w / W, h / H]      # inches -> figure fraction
+
+    k0  = 20 * MM, 25 * MM                                       # key plot area's corner
+    kax = fig.add_axes(box(*k0, side, side))
+    draw(kax, key, False)
+    kax.set_ylabel(ylabel)
+    kpad = _pads(fig, kax)
+    band = (k0[1] - kpad[1], k0[1] + side + kpad[3])             # key's full height, text included
+
+    axes = [fig.add_axes(box(0, 0, side / 3, side / 3)) for _ in range(nrows * ncols)]
+    for ax, p in zip(axes, small):
+        draw(ax, p, True)
+    # Text around a panel does not scale with it, so measure it once and solve for the side.
+    pad = [max(v) for v in zip(*[_pads(fig, ax) for ax in axes[:len(small)]])]
+    s   = (band[1] - band[0] - (nrows - 1) * gaps["row"]) / nrows - pad[1] - pad[3]
+    x0  = k0[0] + side + kpad[2] + gaps["key"] + pad[0]
+    for n, ax in enumerate(axes):
+        r, c = divmod(n, ncols)
+        ax.set_position(box(x0 + c * (pad[0] + s + pad[2] + gaps["col"]),
+                            band[1] - pad[3] - s - r * (pad[1] + s + pad[3] + gaps["row"]), s, s))
+
+    # The tight crop trusts matplotlib's text extents, which come up short for some labels
+    # (the "1" of a vertical "1D CNN" falls outside its box and was cut off). An invisible
+    # 1.5 mm rule beneath the lowest text holds the crop open.
+    r  = fig.canvas.get_renderer()
+    y0 = min(ax.get_tightbbox(r).y0 for ax in [kax, *axes[:len(small)]]) / fig.dpi
+    fig.add_artist(Line2D([0.5, 0.5], [(y0 - 1.5 * MM) / H, y0 / H], alpha=0))
+
+    spare = axes[len(small):]
+    for ax in spare:
+        ax.axis("off")
+    if spare:
+        spare[0].legend(handles=legend, loc="center left", frameon=False, fontsize=FS["small"],
+                        handletextpad=0.4, borderaxespad=0, bbox_to_anchor=(-0.15, 0.5))
+    else:
+        fig.legend(handles=legend, loc="upper center", ncol=len(legend), frameon=False,
+                   bbox_to_anchor=(0.5, band[0] / H))
+    return fig
+
+
 def apply():
     plt.rcParams.update({
         "font.family": "sans-serif", "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
@@ -129,4 +195,4 @@ def apply():
 
 __all__ = ["MM", "FULL", "HALF", "FAMILY", "FAMILY_LABEL", "RAMP", "K_MARKER", "TINT", "ENS", "GREY", "PRIOR",
            "INK", "MUTED", "HAIR", "SHADE", "FS", "LW", "k_colors", "k_markers", "msp_line", "msp_handle",
-           "line_handle", "patch_handle", "panel_letter", "apply"]
+           "line_handle", "patch_handle", "panel_letter", "KEY_SIDE", "KEY_GAPS", "key_figure", "apply"]
